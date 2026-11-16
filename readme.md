@@ -47,8 +47,8 @@ that name. Other branches build without releasing (the files are on the Actions 
 Shared settings live in `config/modes/` (see its README); per-keyboard settings in
 `config/devices/<id>/`.
 
-## English Colemak and Korean
+## English and Korean
 
-The firmware starts in English Colemak and keeps the previous Korean key positions on a separate layer. Use the right thumb language key or the right-top language combo to switch both the host input language and the firmware layer. Configure the host for QWERTY English and Korean 2-set; a host-side Colemak layout would remap the firmware output again. macOS is the default and sends F18 for language switching. Toggle Windows mode from Settings (right home row, second key) to swap the modifiers and send LANG1 instead; the toggle is not saved, so the keyboard returns to macOS after a restart.
+The firmware starts in English QWERTY and keeps the Korean key positions on a separate layer. Use the right thumb language key to switch both the host input language and the firmware layer. Configure the host for QWERTY English and Korean 2-set. macOS is the default and sends F18 for language switching. Toggle Windows mode from Settings (right home row, second key) to swap the modifiers and send LANG1 instead; the toggle is not saved, so the keyboard returns to macOS after a restart.
 
 The keyboard cannot detect input-source changes made on the host. If the two layouts get out of sync, hold the outer thumb combo for Settings and tap the top-right key to toggle only the firmware layout.
