@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = {"ble": "config", "bledongle": "config", "usb": "config", "esb": "config-esb"}
+MANIFEST = {"ble": "config", "bleright": "config", "bledongle": "config", "usb": "config", "esb": "config-esb"}
 NO_BLE = {"esb", "usb"}  # builds without the &bt behavior
 
 
@@ -34,6 +34,10 @@ def targets(dev_id, dev, dongle_board):
         if m == "ble":
             yield m, "left", board, f"{shield}_left", mode("half", "ble", "ble_central") + half, []
             yield m, "right", board, f"{shield}_right", mode("half", "ble") + half, []
+        elif m == "bleright":
+            yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half, []
+            yield (m, "right", board, f"{shield}_right",
+                   mode("half", "ble", "central", "ble_central") + half, [])
         elif m == "bledongle":
             yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half, []
             yield m, "right", board, f"{shield}_right", mode("half", "ble") + half, []

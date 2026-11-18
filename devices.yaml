@@ -12,6 +12,7 @@
 #
 # Modes:
 #   ble        left half is the central, connects to the host over Bluetooth
+#   bleright   same as ble with the roles swapped: right half is the central
 #   bledongle  both halves are peripherals of a BLE dongle (USB to the host)
 #   esb        both halves talk ESB to a dongle (USB to the host)
 #   usb        one-piece wired keyboard
@@ -22,7 +23,7 @@ keyboards:
   klotz:
     board: nice_nano//zmk
     shield: klotz
-    modes: [ble, bledongle, esb]
+    modes: [ble, bleright, bledongle, esb]
 
   urchin:
     board: nice_nano//zmk

@@ -17,7 +17,7 @@ cfg = json.load(sys.stdin)
 repo = os.environ.get("GITHUB_REPOSITORY", "jadewisemann/zmk-config-klotz")
 base = f"https://github.com/{repo}/releases/download/{tag}"
 
-MODES = {"ble": "BLE", "bledongle": "BLE dongle", "esb": "ESB dongle", "usb": "Wired"}
+MODES = {"ble": "BLE", "bleright": "BLE (right central)", "bledongle": "BLE dongle", "esb": "ESB dongle", "usb": "Wired"}
 PARTS = ["left", "right", "dongle"]
 
 dist = Path("dist")

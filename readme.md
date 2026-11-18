@@ -11,12 +11,13 @@ in `devices.yaml`:
 
 | keyboard | controller | modes |
 |---|---|---|
-| KLOTZ | nice!nano | `ble`, `bledongle`, `esb` |
+| KLOTZ | nice!nano | `ble`, `bleright`, `bledongle`, `esb` |
 | Urchin | nice!nano | `ble`, `bledongle`, `esb` |
 | TOTEM | XIAO BLE | `ble`, `bledongle`, `esb` |
 | TC36K | Raspberry Pi Pico | `usb` (wired) |
 
 - `ble`: the left half is the central and pairs with the host over Bluetooth.
+- `bleright`: like `ble` with the roles swapped: the right half is the central and pairs with the host.
 - `bledongle`: both halves connect to a nice!nano dongle over Bluetooth; the dongle plugs in over USB.
 - `esb`: both halves connect to a nice!nano dongle over ESB (lower latency); the dongle plugs in over USB.
 

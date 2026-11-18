@@ -8,8 +8,9 @@ order listed in `scripts/matrix.py`) + the device's own files in
 |---|---|
 | `half.conf` | every battery-powered half, all modes |
 | `ble.conf` | everything that talks Bluetooth (BLE halves, BLE dongle) |
-| `ble_central.conf` | whatever is the BLE split central (left half in `ble`, dongle in `bledongle`) |
-| `peripheral.conf` | left half when a dongle is the central (`bledongle`, `esb`) |
+| `ble_central.conf` | whatever is the BLE split central (left half in `ble`, right half in `bleright`, dongle in `bledongle`) |
+| `central.conf` | right half when it is the central (`bleright`) |
+| `peripheral.conf` | left half when something else is the central (`bleright`, `bledongle`, `esb`) |
 | `ble_dongle.conf` | BLE dongle |
 | `esb.conf` | every ESB build (halves and dongle) - radio settings must match |
 | `esb_left.conf` / `esb_right.conf` | ESB peripheral IDs |
