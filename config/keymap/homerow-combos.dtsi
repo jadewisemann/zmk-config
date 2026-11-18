@@ -1,7 +1,7 @@
 /*
  * Home-row modifier combos.
  *
- * Included by klotz.keymap after layer IDs and COMBO_TERM_MS are defined.
+ * Included by base.keymap after layer IDs and COMBO_TERM_MS are defined.
  */
 
 #define L_PINKY  10

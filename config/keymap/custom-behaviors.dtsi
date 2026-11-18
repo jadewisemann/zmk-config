@@ -1,7 +1,7 @@
 /*
  * Stable custom behaviors and aliases used by the layer definitions.
  *
- * Included by klotz.keymap after layer IDs and timing values are defined.
+ * Included by base.keymap after layer IDs and timing values are defined.
  */
 
 /* Global behavior configuration */

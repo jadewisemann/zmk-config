@@ -1,8 +1,6 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="/docs/images/KLOTZ_font_dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="/docs/images/KLOTZ_font_bright.svg">
-  <img alt="KLOTZ logo font" src="/docs/images/KLOTZ_font_bright.svg">
-</picture>
+# zmk-config
+
+ZMK firmware for KLOTZ, Urchin, TOTEM and TC36K, with English QWERTY and Korean 2-set layers.
 
 ## Keyboards and firmware
 

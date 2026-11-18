@@ -14,7 +14,7 @@ from pathlib import Path
 
 fw_dir, tag, suffix, message = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4].strip()
 cfg = json.load(sys.stdin)
-repo = os.environ.get("GITHUB_REPOSITORY", "jadewisemann/zmk-config-klotz")
+repo = os.environ.get("GITHUB_REPOSITORY", "jadewisemann/zmk-config")
 base = f"https://github.com/{repo}/releases/download/{tag}"
 
 MODES = {"ble": "BLE", "bleright": "BLE (right central)", "bledongle": "BLE dongle", "esb": "ESB dongle", "usb": "Wired"}
