@@ -13,5 +13,6 @@ order listed in `scripts/matrix.py`) + the device's own files in
 | `peripheral.conf` | left half when something else is the central (`bleright`, `bledongle`, `esb`) |
 | `ble_dongle.conf` | BLE dongle |
 | `esb.conf` | every ESB build (halves and dongle) - radio settings must match |
+| `esb_half.conf` | both ESB halves: no idle before deep sleep, so a desynced half keeps resyncing |
 | `esb_left.conf` / `esb_right.conf` | ESB peripheral IDs |
 | `esb_dongle.conf` | ESB dongle |

@@ -45,8 +45,8 @@ def targets(dev_id, dev, dongle_board):
                    mode("ble", "ble_central", "ble_dongle") + dongle, [f"{d}/dongle.overlay"])
         elif m == "esb":
             esb = [f"{d}/esb.overlay"]
-            yield m, "left", board, f"{shield}_left", mode("half", "esb", "esb_left", "peripheral") + half, esb
-            yield m, "right", board, f"{shield}_right", mode("half", "esb", "esb_right") + half, esb
+            yield m, "left", board, f"{shield}_left", mode("half", "esb", "esb_half", "esb_left", "peripheral") + half, esb
+            yield m, "right", board, f"{shield}_right", mode("half", "esb", "esb_half", "esb_right") + half, esb
             yield (m, "dongle", dongle_board, "kb_dongle",
                    mode("esb", "esb_dongle") + dongle, [f"{d}/dongle.overlay"] + esb)
         elif m == "usb":
