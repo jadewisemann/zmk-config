@@ -16,7 +16,11 @@ for t in json.loads(os.environ["TARGETS"]):
     absl = lambda paths: ";".join(str(root / p) for p in paths.split(";"))
     args = [f"-DZMK_CONFIG={root / 'config'}", f"-DSHIELD={t['shield']}"]
     # Local Zephyr modules (Kconfig options stay off unless a .conf enables them).
-    args.append(f"-DZMK_EXTRA_MODULES={root / 'extra-modules' / 'hfxo-always-on'}")
+    # The ESB transport needs nRF Connect SDK, which only the ESB manifest has.
+    modules = ["hfxo-always-on"]
+    if t["manifest"] == "config-esb":
+        modules.append("zmk-split-esb")
+    args.append("-DZMK_EXTRA_MODULES=" + ";".join(str(root / "extra-modules" / m) for m in modules))
     if t["keymap"]:
         args.append(f"-DKEYMAP_FILE={root / t['keymap']}")
     if t["confs"]:

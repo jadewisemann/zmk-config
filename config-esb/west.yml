@@ -8,16 +8,14 @@ manifest:
       url-base: https://github.com/dhruvinsh
     - name: duckyb
       url-base: https://github.com/duckyb
-    - name: jadewisemann
-      url-base: https://github.com/jadewisemann
     - name: kumbung01
       url-base: https://github.com/kumbung01
     - name: nrfconnect
       url-base: https://github.com/nrfconnect
   # Revisions are pinned on purpose. `revision: main` meant every CI run could
   # pick up a different ZMK / module tree, so the same commit of this repo did
-  # not produce the same firmware twice - and the ESB module tracks ZMK's split
-  # transport API, which is still moving.
+  # not produce the same firmware twice - and the ESB transport tracks ZMK's
+  # split transport API, which is still moving.
   # Extra modules go under modules/ so the CI west cache (which caches
   # modules/, zephyr/, zmk/, ...) contains them. Do the same for new ones.
   projects:
@@ -42,23 +40,20 @@ manifest:
       remote: duckyb
       revision: a3ab64fa7779f82675695f3d7d17f705f840da25
       path: modules/urchin-zmk-module
-    # Our own fork, so RX-framing / sleep fixes actually land in the build.
-    # Upstream is kumbung01/zmk-feature-split-esb.
-    # 57a31ec adds whole-key state resync on reconnect / failed sends - the
-    # stuck-key fix. Lost releases used to stay lost: esb_tdma_stop() wipes the
-    # TX ring via reset_tx_all(), a full ring makes send_data() fail with the
-    # return ignored, and nothing re-sent the bitmap after reconnect.
-    - name: zmk-feature-split-esb
-      remote: jadewisemann
-      revision: 57a31ec621384e736796bc50c46f1e6a4227ef3a
-      path: modules/zmk-feature-split-esb
+    # The ESB split transport and its radio layer are not west projects: they
+    # live in this repository, in extra-modules/zmk-split-esb (see its README).
+    # nRF Connect SDK is still needed for the MPSL glue the radio layer links
+    # against. Its own subsys/esb is not built (CONFIG_ESB stays off).
+    # This is kumbung01's fork at the head of v3.1-branch-tdma-fhss, pinned to
+    # a commit like everything else here.
     - name: sdk-nrf
       remote: kumbung01
-      revision: v3.1-branch-tdma-fhss
+      revision: 07b7e70c0d223429c58e6cffb4e6ecaa70ff949e
       path: nrf
+    # nrfconnect/sdk-nrfxlib at the head of v3.1-branch.
     - name: nrfxlib
       remote: nrfconnect
-      revision: v3.1-branch
+      revision: dfadf17305d8f000eda9aa74a5b9ff1c5647a23e
       repo-path: sdk-nrfxlib
       path: nrfxlib
   self:

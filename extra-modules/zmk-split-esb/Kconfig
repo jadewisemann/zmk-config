@@ -1,0 +1,27 @@
+# Copyright (c) 2025 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+if ZMK_SPLIT
+
+config ZMK_SPLIT_ESB
+    bool "ESB split transport"
+    # What nRF Connect SDK's "menuconfig ESB" selected. ESB itself stays off:
+    # the radio layer is built from this module (src/radio), not from nrf/subsys/esb.
+    select NRFX_PPI if HAS_HW_NRF_PPI
+    select MPSL
+    select MPSL_FEM_ONLY if !ZMK_ESB_DYNAMIC_INTERRUPTS
+    select ENTROPY_GENERATOR
+    select ENTROPY_NRF5_RNG
+    help
+        Split transport over a TDMA / frequency-hopping protocol on the Nordic
+        ESB physical layer. Needs CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE >= 2048.
+
+endif # ZMK_SPLIT
+
+if ZMK_SPLIT && ZMK_SPLIT_ESB
+
+rsource "src/radio/Kconfig"
+
+endif # ZMK_SPLIT && ZMK_SPLIT_ESB
+
+rsource "src/transport/Kconfig"

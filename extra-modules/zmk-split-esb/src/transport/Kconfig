@@ -1,0 +1,79 @@
+# Copyright (c) 2025 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+if ZMK_SPLIT && ZMK_SPLIT_ESB
+
+menu "ESB Transport"
+
+config ZMK_SPLIT_ESB_ROLE_CENTRAL
+    bool
+    default y if ZMK_SPLIT_ROLE_CENTRAL
+    select ZMK_ESB_CENTRAL
+
+config ZMK_SPLIT_ESB_PRIORITY
+    int "ESB transport priority"
+    default 1
+    help
+        Lower number priority transports are favored over higher numbers.
+        ZMK_SPLIT_TRANSPORT_{CENTRAL,PERIPHERAL}_REGISTER already referenced
+        this symbol; without a definition the registration section was named
+        after the literal macro text rather than a priority.
+
+endmenu
+
+config ZMK_SPLIT_ESB_PERIPHERAL_ID
+    int "Default peripheral id for TX"
+    default 0
+
+config ZMK_SPLIT_ESB_BITRATE_2MBPS
+    bool "Set ESB bitrate to 2Mbps"
+    default y
+
+config ZMK_SPLIT_ESB_USE_WORK_QUEUE_DEDICATED
+    bool "use dedicated workqueue for esb thread"
+    default n
+
+config ZMK_SPLIT_ESB_RX_THREAD_STACK_SIZE
+    int "esb rx thread stack size"
+    default 2048
+
+config ZMK_SPLIT_ESB_RX_THREAD_PRIORITY
+    int "esb rx thread priority"
+    default -1
+
+config ZMK_SPLIT_ESB_SEND_WHOLE_KEY
+    bool "send whole key state"
+    default n
+
+module = ZMK_SPLIT_ESB
+module-str = ZMK_SPLIT_ESB
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
+
+endif #ZMK_SPLIT && ZMK_SPLIT_ESB
+
+# **************************************************************************
+# Following config is cloned for battery monitoring, if BLE is not enabled.
+# **************************************************************************
+
+if ZMK_SPLIT && !ZMK_SPLIT_BLE
+if ZMK_SPLIT_ROLE_CENTRAL
+
+config ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
+    int "Number of peripherals that will connect to the central."
+
+config ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING
+    bool "Fetch Peripheral Battery Level Info"
+
+if ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING
+
+config ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_QUEUE_SIZE
+    int "Max number of battery level events to queue when received from peripherals"
+    default ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS
+
+config ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_PROXY
+    bool "Proxy Peripheral Battery Level Info"
+
+endif #ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING
+
+endif #ZMK_SPLIT_ROLE_CENTRAL
+endif #ZMK_SPLIT && !ZMK_SPLIT_BLE
