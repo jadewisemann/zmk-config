@@ -1,6 +1,6 @@
 # zmk-config
 
-ZMK firmware for KLOTZ, Urchin, TOTEM and TC36K, with English QWERTY and Korean 2-set layers.
+ZMK firmware for KLOTZ, Urchin, TOTEM and TC36K: one layout for English and Korean.
 
 ## Keyboards and firmware
 
@@ -48,6 +48,12 @@ Shared settings live in `config/modes/` (see its README); per-keyboard settings 
 
 ## English and Korean
 
-The firmware starts in English QWERTY and keeps the Korean key positions on a separate layer. Use the right thumb language key to switch both the host input language and the firmware layer. Configure the host for QWERTY English and Korean 2-set. macOS is the default and sends F18 for language switching. Toggle Windows mode from Settings (right home row, second key) to swap the modifiers and send LANG1 instead; the toggle is not saved, so the keyboard returns to macOS after a restart.
+There is one base layout, arranged for Korean 2-set, and the same keys type English.
+The language key (right outer thumb) only switches the host's input language; the
+firmware layout never changes. Compared with QWERTY, the right hand differs:
+`P` (ㅔ) sits on the home-row pinky, `/` takes the top-right corner, `B` (ㅠ) is on
+both hands, and `N` `M` `,` `.` move one key right. `;` is on the Nav layer.
 
-The keyboard cannot detect input-source changes made on the host. If the two layouts get out of sync, hold the outer thumb combo for Settings and tap the top-right key to toggle only the firmware layout.
+macOS is the default and the language key sends F18. Toggle Windows mode from Settings
+(right home row, second key) to swap the modifiers and send LANG1 instead; the toggle
+is not saved, so the keyboard returns to macOS after a restart.

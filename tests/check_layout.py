@@ -13,17 +13,14 @@ def keys(layer):
     return re.findall(r"&kp\s+([A-Z]+)", body)
 
 
-assert keys("Base") == "Q W E R T Y U I O P A S D F G H J K L SEMI Z X C V B N M COMMA DOT SLASH".split()
-assert keys("Korean") == "Q W E R T Y U I O SLASH A S D F G H J K L P Z X C V B B N M COMMA DOT".split()
-assert "#define KOREAN      1" in keymap
-assert "&lang_num NUM 0" in keymap
-assert "&mac_lang_num NUM 0" in keymap
-assert "&tog KOREAN" in keymap
-assert "bindings = <&kp LANG1 &tog KOREAN>;" in behaviors
-assert "bindings = <&kp F18 &tog KOREAN>;" in behaviors
+# One layout for both languages; the Korean 2-set arrangement is the reference.
+assert keys("Base") == "Q W E R T Y U I O SLASH A S D F G H J K L P Z X C V B B N M COMMA DOT".split()
+assert "LAYER(Korean," not in keymap and "KOREAN" not in keymap + combos + behaviors, "no separate Korean layer"
+assert "bindings = <&mo>, <&kp>;" in behaviors
+assert "&lang_num NUM LANG1" in keymap
 assert "ZMK_COMBO(outer_thumb, MO_CAPS_SETTING,  31 32," in combos, "outer_thumb is the only way into Settings"
 base_thumbs = keymap.split("LAYER(Base,", 1)[1].split("\n)\n", 1)[0]
-assert "&sk LGUI" in base_thumbs and "&mac_lang_num NUM 0" in base_thumbs, "macOS must be the default"
+assert "&sk LGUI" in base_thumbs and "&lang_num NUM F18" in base_thumbs, "macOS must be the default"
 assert "#define TOGGLE_WIN &tog WIN_TOGGLE" in keymap
 assert "MAC_" not in keymap + combos + behaviors
-print("QWERTY/Korean keymap check passed")
+print("keymap check passed")
