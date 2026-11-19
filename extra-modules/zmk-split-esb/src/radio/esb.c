@@ -263,8 +263,11 @@ static volatile enum esb_state esb_state = ESB_STATE_IDLE;
 
 static struct esb_tdma_context {
 	uint32_t last_hb; // last heartbeat timer value
-	int32_t drift;	  // drift between central and peripheral
-	int32_t drift_now;
+	int32_t drift;	  // drift between central and peripheral, us per heartbeat * SCALE
+	int32_t drift_now; // drift correction (ticks) applied to the current rx start
+	int32_t sync_rem_us; // what rounding last_hb to a tick left over (true - rounded)
+	uint8_t scan_margin; // extra window margin (ticks) until the first re-sync after a scan
+	uint8_t margin_now;  // window margin (ticks) of the current rx start
 	uint32_t refslot;	 // refslot from central
 	uint32_t hb_loops;	 // calculated hb loops
 	uint32_t slotsize_ticks; // slot size
@@ -282,6 +285,8 @@ static struct esb_tdma_context {
 	uint8_t addr_delay;  // calcualted addr delay
 	uint8_t channel_idx; // current channel index(for rssi, tx_power)
 	uint8_t pipes;	     // number of pipes that are enabled
+
+	uint8_t scan_count;  // scans since sync was lost (saturates at DESYNC_FAST_SCANS)
 
 	bool is_hb; // true if current slot is heartbeat
 	bool hb_failed;
@@ -326,14 +331,28 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
 #define ESB_PERIPHERAL !CONFIG_ZMK_ESB_CENTRAL
 
 #define TICK			   (30)
-#define DRIFT_LIMIT		   (50)
+/* A drift measurement beyond this is taken for a bad capture, not a bad clock.
+ * 2000 ppm is four times what an RC low-frequency oscillator may be off by.
+ */
+#define DRIFT_LIMIT_PPM		   (2000)
 #define DESYNC_LIMIT_MS_PERIPHERAL (500)
 #define DESYNC_LIMIT_MS_CENTRAL	   (3000)
 
 #define RADIO_MARGIN_TICKS   (3)
 #define TIMEOUT_MARGIN_TICKS (4)
 #define HFCLK_WARMUP_TICKS   (12)
-#define WINDOW_MARGIN_TICKS  (2)
+/* How long before the expected slot start a peripheral opens its receiver.
+ *
+ * This is the whole budget for the central's clock running ahead of ours since
+ * the last heartbeat, minus up to half a tick of rounding in last_hb. A packet
+ * that arrives late is caught by the rest of the RX window (hundreds of us);
+ * one that arrives early is simply missed. It was 2 ticks (61 us) with a 1 s
+ * heartbeat, i.e. roughly 45 ppm between two 32 kHz crystals, which two
+ * in-tolerance crystals can already exceed - and that half then lost every
+ * heartbeat and cycled through desync. 5 ticks (152 us) over a 250 ms
+ * heartbeat is about 550 ppm before the drift estimate has learned anything.
+ */
+#define WINDOW_MARGIN_TICKS  (5)
 #define DRIFT_MARGIN_TICKS   (1)
 #define ISR_MARGIN_TICKS     (5)
 
@@ -344,8 +363,12 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
 #define DRIFT_MARGIN_US	  (k_ticks_to_us_near32(DRIFT_MARGIN_TICKS))
 #define ISR_MARGIN_US	  (k_ticks_to_us_near32(ISR_MARGIN_TICKS))
 
-#define HEARTBEAT_INTERVAL_US 1000000
-#define HEARTBEAT_INTERVAL_MS (HEARTBEAT_INTERVAL_US / 1000)
+/* How often an idle peripheral wakes up to re-sync with the central, in RTC
+ * ticks (250 ms). It bounds how much clock drift has to be predicted, and how
+ * long a command from the central waits for an idle peripheral. One heartbeat
+ * is an RX window of a few hundred us plus a 4-byte reply.
+ */
+#define HEARTBEAT_TICKS (32768 / 4)
 
 #ifdef CONFIG_ZMK_ESB_FAST_SWITCHING_PERIPHERAL
 #define ESB_FAST_SWITCHING_PERIPHERAL 1
@@ -359,6 +382,21 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
 #define CENTRAL_PIPE	(7)
 
 #define DESYNC_AIRTIME_DEFAULT (250000)
+/* A peripheral without sync scans: it listens on one channel until a packet for
+ * its pipe arrives there. The first scans after start-up or after losing sync
+ * follow each other directly, so a link that only hiccuped is back within a
+ * fraction of a second. After that one scan starts per second (as every scan
+ * used to), to spare the battery while the dongle is not there at all.
+ */
+#define DESYNC_FAST_SCANS     (10)
+/* A scan measures where the slot is with the 1 MHz timer, over up to 400 ms,
+ * while slots are scheduled on the 32 kHz clock. The two disagree by however
+ * far the crystals are apart, so until the first re-sync the window opens
+ * earlier by this share of the measured time, at most DESYNC_SCAN_MARGIN_MAX.
+ */
+#define DESYNC_SCAN_MARGIN_PPM (500)
+#define DESYNC_SCAN_MARGIN_MAX (5)
+#define DESYNC_SCAN_LEAD_TICKS (HFCLK_WARMUP_TICKS + ISR_MARGIN_TICKS + RADIO_MARGIN_TICKS)
 #define SCALE		       (1024)
 #define ALPHA		       (120)
 #define RSSI_BASELINE	       (63)
@@ -446,7 +484,7 @@ static void set_slotsize_ticks(uint32_t slotsize_ticks)
 static void set_hb_loops(void)
 {
 	uint32_t loop_size = ctx.slotsize_ticks * ctx.pipes;
-	ctx.hb_loops = 32768 / loop_size;
+	ctx.hb_loops = MAX(HEARTBEAT_TICKS / loop_size, 1);
 
 	// LOG_WRN("HEARTBEAT LOOPS(%u) SIZE(%u)", ctx.hb_loops, ctx.hb_loops * loop_size);
 }
@@ -663,6 +701,19 @@ static inline void drift_reset(void)
 	drift_initialized = true;
 	ctx.drift = 0;
 	ctx.drift_now = 0;
+	ctx.sync_rem_us = 0;
+	ctx.scan_margin = 0;
+}
+
+static inline int32_t us_to_ticks_signed(int32_t us)
+{
+	return us >= 0 ? (int32_t)k_us_to_ticks_near32(us) : -(int32_t)k_us_to_ticks_near32(-us);
+}
+
+static inline int32_t ticks_to_us_signed(int32_t ticks)
+{
+	return ticks >= 0 ? (int32_t)k_ticks_to_us_near32(ticks)
+			  : -(int32_t)k_ticks_to_us_near32(-ticks);
 }
 
 static inline void drift_update(int64_t drift)
@@ -699,16 +750,26 @@ static inline int32_t drift_get_us(uint32_t clock_diff)
 	return drift;
 }
 
+/* How many ticks before the expected slot start the receiver opens. The RX
+ * window is this plus half a slot, and it has to be over before the watchdog
+ * compare that sits TIMEOUT_MARGIN_TICKS before the end of the slot - which
+ * only gets tight at a 2 kHz polling rate.
+ */
+static inline int32_t window_margin_ticks(void)
+{
+	int32_t room = (int32_t)ctx.slotsize_ticks - TIMEOUT_MARGIN_TICKS - 1 -
+		       (int32_t)ctx.window_size;
+
+	return CLAMP(WINDOW_MARGIN_TICKS + ctx.scan_margin, 1, MAX(room, 1));
+}
+
+/* Rounded to the nearest tick, so the correction is off by at most half a tick
+ * either way. (It used to round towards "earlier", which made any negative
+ * estimate, however small, open the window a full tick early.)
+ */
 static inline int32_t drift_get_ticks(uint32_t clock_diff)
 {
-	int32_t drift_us = drift_get_us(clock_diff);
-	if (drift_us >= 0) {
-		return k_us_to_ticks_floor32(drift_us);
-	} else {
-		return -k_us_to_ticks_ceil32(-drift_us);
-	}
-
-	return 0;
+	return us_to_ticks_signed(drift_get_us(clock_diff));
 }
 #endif
 
@@ -779,7 +840,7 @@ static void central_setup(void)
 	nrf_timer_int_enable(esb_timer.p_reg, NRF_TIMER_INT_COMPARE1_MASK);
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_CRCOK_MASK);
 	ctx.pipes = ESB_PIPE_COUNT;
-	set_slotsize_us(HEARTBEAT_INTERVAL_US / CONFIG_ZMK_ESB_POLLING_RATE);
+	set_slotsize_us(USEC_PER_SEC / CONFIG_ZMK_ESB_POLLING_RATE);
 	// set_slotsize_us(62500);
 
 	set_hb_loops();
@@ -834,6 +895,7 @@ void pto_context_reset(void)
 	ctx.refslot = 0;
 	ctx.desync_count = 0;
 	ctx.channel_idx = 0;
+	ctx.scan_count = 0;
 }
 
 /* Run time variables */
@@ -2438,19 +2500,35 @@ static void central_prepare_tx(void)
 
 	bool slot_synced = is_slot_synced(pipe);
 	uint8_t packet_length = sizeof(struct esb_header_dn);
+	uint8_t data_length = slot_synced ? copy_tx(pipe, tx_packet->data) : 0;
 
-	// if slot is out of sync, then send refslot
-	if (!slot_synced) {
+	/* Every packet that carries no payload carries the slot parameters, not
+	 * only the ones for a pipe this side already considers lost.
+	 *
+	 * A peripheral gives up after 0.5 s without a packet, the central only
+	 * after 3 s without an answer. In between the peripheral used to scan
+	 * and find nothing but empty polls it could not sync to, so every lost
+	 * sync cost at least 3 s - and the central then released that half's
+	 * keys. Now any poll is enough to get back in.
+	 *
+	 * A synced peripheral answers a control packet, where it stayed silent
+	 * on an empty poll. That also closes a hole in the ARQ: it used to take
+	 * the empty poll's sequence number without saying so, and then dropped
+	 * the next real payload sent under that number as a duplicate.
+	 */
+	bool is_ctrl = data_length == 0;
+
+	if (is_ctrl) {
 		packet_length += sizeof(struct esb_ctrl_packet);
 		set_control_packet(tx_packet->data);
-	}
-	// if next packet can be transmitted, then read txbuf
-	else {
-		packet_length += copy_tx(pipe, tx_packet->data);
-		pipe_info->tx_try = packet_length > sizeof(struct esb_header_dn) ? 1 : 0;
+	} else {
+		packet_length += data_length;
 	}
 
-	pdu->pdu.ctrl = !slot_synced;
+	/* Only a payload may be popped from the ring when the answer comes in. */
+	pipe_info->tx_try = is_ctrl ? 0 : 1;
+
+	pdu->pdu.ctrl = is_ctrl;
 	pdu->pdu.length = packet_length;
 	pdu->pdu.sn = pipe_info->sn;
 	pdu->pdu.nesn = pipe_info->nesn;
@@ -2600,10 +2678,19 @@ static void disable_radio(void)
 
 static void peripheral_start_desync(void)
 {
-	uint32_t airtime = MIN(ctx.slotsize_us * ctx.pipes * 200, HEARTBEAT_INTERVAL_US);
+	uint32_t airtime = MIN(ctx.slotsize_us * ctx.pipes * 200, USEC_PER_SEC);
 	airtime = (airtime != 0 ? airtime : DESYNC_AIRTIME_DEFAULT);
-	uint32_t heartbeat_ticks = k_us_to_ticks_near32(HEARTBEAT_INTERVAL_US);
-	uint32_t start = NRF_RTC_WRAP(ctx.start + heartbeat_ticks);
+
+	/* The lead is what the 32 MHz crystal needs to start. */
+	uint32_t lead = DESYNC_SCAN_LEAD_TICKS;
+	bool fast_scan = ctx.scan_count < DESYNC_FAST_SCANS;
+	if (fast_scan) {
+		ctx.scan_count++;
+	} else {
+		lead = MAX(k_us_to_ticks_near32(USEC_PER_SEC - airtime), lead);
+	}
+
+	uint32_t start = NRF_RTC_WRAP(nrfx_rtc_counter_get(&esb_rtc) + lead);
 	uint32_t timeout = airtime;
 	nrfy_rtc_cc_set(esb_rtc.p_reg, 0, start);
 	nrfy_timer_cc_set(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL1, timeout);
@@ -2615,10 +2702,18 @@ static void peripheral_start_desync(void)
 		set_sync_evt_interrupt(0, false);
 	}
 
-	on_timer_compare1 = hfclk_on_isr;
-	nrfy_rtc_cc_set(esb_rtc.p_reg, 1,
-			NRF_RTC_WRAP(start - HFCLK_WARMUP_TICKS - ISR_MARGIN_TICKS));
-	rtc_irq_enable();
+	if (fast_scan) {
+		/* The scan starts too soon to arm an interrupt for the clock. */
+		rtc_irq_disable();
+		if (!hfclk_is_on) {
+			hfclk_on();
+		}
+	} else {
+		on_timer_compare1 = hfclk_on_isr;
+		nrfy_rtc_cc_set(esb_rtc.p_reg, 1,
+				NRF_RTC_WRAP(start - HFCLK_WARMUP_TICKS - ISR_MARGIN_TICKS));
+		rtc_irq_enable();
+	}
 
 	esb_state = ESB_STATE_PERIPHERAL_DESYNC;
 	on_radio_disabled = peripheral_disabled_desync;
@@ -2655,17 +2750,42 @@ static void peripheral_disabled_desync(void)
 
 	drift_reset();
 
+	/* sn: nothing of ours is waiting for an acknowledgement.
+	 * nesn: the packet we synced on had no payload, so the central's current
+	 * sequence number is still to come. It used to be marked as already
+	 * received, and when the central sent its next payload under that same
+	 * number the payload was dropped as a duplicate - and acknowledged.
+	 */
 	bool rx_sn = pdu->pdu.sn;
 	bool rx_nesn = pdu->pdu.nesn;
 	pipe_info->sn = !rx_nesn;
-	pipe_info->nesn = !rx_sn;
+	pipe_info->nesn = rx_sn;
 	pipe_info->tx_try = 0;
 	ctx.desync_count = 0;
+	ctx.scan_count = 0;
 
 	apply_control_packet(packet->data);
 
 	uint32_t sync = nrf_timer_cc_get(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL2) - ctx.addr_delay;
-	ctx.last_hb = NRF_RTC_WRAP(ctx.start + k_us_to_ticks_near32(sync));
+	uint32_t sync_ticks = k_us_to_ticks_near32(sync);
+	ctx.last_hb = NRF_RTC_WRAP(ctx.start + sync_ticks);
+	ctx.sync_rem_us = (int32_t)sync - (int32_t)k_ticks_to_us_near32(sync_ticks);
+
+	/* Do not wait a whole heartbeat for the first exchange: answer the next
+	 * poll (hb_failed makes that exchange a re-sync). The central then sees
+	 * this peripheral at once, and last_hb is measured again over a few
+	 * hundred us instead of the length of the scan.
+	 */
+	ctx.hb_failed = true;
+	ctx.scan_margin = MIN(k_us_to_ticks_ceil32(sync / (USEC_PER_SEC / DESYNC_SCAN_MARGIN_PPM)),
+			      DESYNC_SCAN_MARGIN_MAX);
+
+	/* Whatever was in flight when the link dropped was never acknowledged.
+	 * Mark the TX buffer as holding no payload, so the first exchange does not
+	 * pop that data from the ring as if it had been delivered - it is sent
+	 * again instead.
+	 */
+	((struct esb_radio_pdu *)tx_payload_buffer)->pdu.ctrl = 1;
 
 	set_sync_evt_interrupt(ctx.pipe, true);
 #ifdef PERIPHERAL_LOG_DS_END
@@ -2681,32 +2801,39 @@ static void peripheral_prepare_next_rx(void)
 	uint32_t now = nrfx_rtc_counter_get(&esb_rtc);
 	uint32_t loop_size = ctx.slotsize_ticks * ctx.pipes;
 	uint32_t passed = NRF_RTC_WRAP(now - ctx.last_hb);
-	uint32_t hb_loops_passed = passed / loop_size;
 	uint32_t hfclk_margin = hfclk_is_on ? 0 : HFCLK_WARMUP_TICKS;
-	uint32_t loops_diff = hb_loops_passed + 1;
-	struct pipe_info *info = rx_pipe_info_get(0);
+	uint32_t loops_diff = passed / loop_size + 1;
 
 	esb_state = ESB_STATE_PERIPHERAL_RX;
 
-	// rtc can have drift only 500ppm
-	int32_t rx_start = ctx.last_tx + loop_size * 3;
-	for (int i = 0; i < k_us_to_ticks_ceil32(500); ++i) {
+	/* Pick the first of our slots that can still be reached. Everything is
+	 * kept relative to last_hb: comparing absolute counter values goes wrong
+	 * when the 24-bit RTC wraps between last_hb and now.
+	 */
+	int32_t margin = window_margin_ticks();
+	int32_t drift_ticks = 0;
+	int32_t rx_offset = 0; /* RX start, in ticks after last_hb */
+	for (int i = 0;; ++i) {
 		uint32_t diff = loops_diff * loop_size;
 
-		int32_t drift_ticks = drift_get_ticks(diff);
-		rx_start = (int32_t)(ctx.last_hb + diff + drift_ticks - WINDOW_MARGIN_TICKS);
+		drift_ticks = drift_get_ticks(diff);
+		rx_offset = (int32_t)diff + drift_ticks - margin;
 
-		if ((int32_t)(rx_start - now) < (int32_t)(RADIO_MARGIN_TICKS + hfclk_margin)) {
-			loops_diff++;
-
-			continue;
+		/* The second condition only bounds the loop; one or two extra
+		 * loops are always enough to clear the margins.
+		 */
+		if (rx_offset - (int32_t)passed >= (int32_t)(RADIO_MARGIN_TICKS + hfclk_margin) ||
+		    i >= 8) {
+			break;
 		}
 
-		break;
+		loops_diff++;
 	}
 
-	ctx.start = NRF_RTC_WRAP((uint32_t)rx_start);
-	ctx.timeout = ctx.window_size_us + WINDOW_MARGIN_US;
+	ctx.start = NRF_RTC_WRAP(ctx.last_hb + (uint32_t)rx_offset);
+	ctx.drift_now = drift_ticks;
+	ctx.margin_now = margin;
+	ctx.timeout = ctx.window_size_us + k_ticks_to_us_near32(margin);
 
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_CRCOK);
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
@@ -2716,7 +2843,12 @@ static void peripheral_prepare_next_rx(void)
 	nrfy_rtc_cc_set(esb_rtc.p_reg, 0, ctx.start);
 	nrfy_timer_cc_set(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL1, ctx.timeout);
 
-	ctx.is_hb = (loops_diff % ctx.hb_loops) == 0;
+	/* A heartbeat is any exchange a heartbeat period or more after the last
+	 * sync. (It used to be only the loop that is an exact multiple of the
+	 * period, so waking up late for that one loop skipped the re-sync for a
+	 * whole further period.)
+	 */
+	ctx.is_hb = loops_diff >= ctx.hb_loops;
 
 	if (!hfclk_is_on) {
 		hfclk_on();
@@ -2772,28 +2904,35 @@ static void peripheral_prepare_sync(void)
 	uint32_t loop_size = ctx.slotsize_ticks * ctx.pipes;
 	uint32_t hb_size = ctx.hb_loops * loop_size;
 	uint32_t passed = NRF_RTC_WRAP(now - ctx.last_hb);
-	uint32_t hb_passed = passed / hb_size;
 	uint32_t hfclk_margin = (hfclk_is_on ? 0 : HFCLK_WARMUP_TICKS);
-	uint32_t loops_diff = (hb_passed + 1) * ctx.hb_loops;
 
-	uint32_t sync_isr_ticks = ctx.last_hb + loops_diff * loop_size - hfclk_margin -
-				  RADIO_MARGIN_TICKS - WINDOW_MARGIN_TICKS - ISR_MARGIN_TICKS;
+	/* Wake up early enough that peripheral_prepare_next_rx() can still pick
+	 * the heartbeat loop. It needs RADIO_MARGIN_TICKS + hfclk_margin before
+	 * the RX start, and the RX start itself moves with the drift estimate,
+	 * so that has to be part of this too. In ticks after last_hb.
+	 */
+	int32_t isr_offset = (int32_t)hb_size + drift_get_ticks(hb_size) - window_margin_ticks() -
+			     (int32_t)(hfclk_margin + RADIO_MARGIN_TICKS + ISR_MARGIN_TICKS);
+	int32_t ahead = isr_offset - (int32_t)passed;
 
-	if ((int32_t)(sync_isr_ticks - now) < loop_size) {
+	/* Signed on purpose: once the wake-up point is behind us "ahead" is
+	 * negative, and an unsigned compare would read that as far in the future,
+	 * arm a compare the counter has already passed and leave this peripheral
+	 * silent until its next key press.
+	 */
+	if (ahead < (int32_t)loop_size) {
 		peripheral_prepare_next_rx();
-		// LOG_ERR("set now.");
 
 		return;
 	}
 
 	on_timer_compare1 = peripheral_prepare_next_rx;
-	nrfy_rtc_cc_set(esb_rtc.p_reg, 1, sync_isr_ticks);
+	nrfy_rtc_cc_set(esb_rtc.p_reg, 1, NRF_RTC_WRAP(ctx.last_hb + (uint32_t)isr_offset));
 	rtc_irq_enable();
 
 	esb_state = ESB_STATE_PERIPHERAL_RX_READY;
 #ifdef PERIPHERAL_LOG_SYNC
-	LOG_WRN("[%s]\tnow %u isr %u diff %d", __func__, now, sync_isr_ticks,
-		(int32_t)(sync_isr_ticks - now));
+	LOG_WRN("[%s]\tnow %u isr +%d ahead %d", __func__, now, isr_offset, ahead);
 #endif
 }
 
@@ -2806,7 +2945,7 @@ static void peripheral_prepare_rx(void)
 
 	struct pipe_info *pipe_info = rx_pipe_info_get(0);
 	bool send_data = (count_tx(0) > 0) || (pipe_info->tx_try > 0) || ctx.timeout_count > 0 ||
-			 ctx.more_data;
+			 ctx.more_data || ctx.hb_failed;
 
 	if (send_data) {
 		peripheral_prepare_next_rx();
@@ -2817,25 +2956,44 @@ static void peripheral_prepare_rx(void)
 	irq_unlock(key);
 }
 
+/* Re-anchor on the packet just received.
+ *
+ * sync is when the central's slot started, in us after our RX start. The RX
+ * start was last_hb + elapsed + drift correction - window margin, so what the
+ * clocks actually drifted apart over `elapsed` is the part of sync the window
+ * margin does not explain, plus the correction that was already applied, minus
+ * the fraction of a tick last_hb was rounded by.
+ *
+ * (The estimate used to be fed sync - margin alone, i.e. only the error left
+ * over after its own correction, so it kept unlearning what it had learned.
+ * It also ignored anything beyond 50 us, which is exactly the range where a
+ * correction is needed.)
+ */
 static void set_sync(int64_t sync)
 {
-	int64_t drift = sync - WINDOW_MARGIN_US;
-	int32_t sync_ticks = 0;
-	if (abs(drift) <= DRIFT_LIMIT && !ctx.hb_failed) {
-		drift_update(drift);
-		// LOG_WRN("drift set");
+	int32_t sync_ticks = us_to_ticks_signed((int32_t)sync);
+	uint32_t elapsed = ctx.slotdiff * ctx.slotsize_ticks;
+	uint32_t hb_size = ctx.hb_loops * ctx.slotsize_ticks * ctx.pipes;
+
+	/* Shorter than a heartbeat is the re-sync right after a scan (or a retry
+	 * in the middle of typing): too short to tell drift from measurement
+	 * error, so it only moves the anchor.
+	 */
+	if (elapsed >= hb_size) {
+		int64_t drift = sync - k_ticks_to_us_near32(ctx.margin_now) +
+				ticks_to_us_signed(ctx.drift_now) - ctx.sync_rem_us;
+		int64_t drift_per_hb = drift * hb_size / elapsed;
+		int64_t limit = (int64_t)k_ticks_to_us_near32(hb_size) * DRIFT_LIMIT_PPM / 1000000;
+
+		if (drift_per_hb >= -limit && drift_per_hb <= limit) {
+			drift_update(drift_per_hb);
+		}
 	}
 
-	if (sync >= 0) {
-		sync_ticks = k_us_to_ticks_near32(sync);
-	} else {
-		sync_ticks = -k_us_to_ticks_near32(-sync);
-	}
-
-	ctx.last_hb = NRF_RTC_WRAP(ctx.start + sync_ticks);
+	ctx.last_hb = NRF_RTC_WRAP(ctx.start + (uint32_t)sync_ticks);
+	ctx.sync_rem_us = (int32_t)sync - ticks_to_us_signed(sync_ticks);
 	ctx.refslot += ctx.slotdiff;
-
-	// LOG_WRN("sync set");
+	ctx.scan_margin = 0;
 }
 
 static void peripheral_disabled_rx(void)
