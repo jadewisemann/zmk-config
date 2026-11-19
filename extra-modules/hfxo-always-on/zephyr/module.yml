@@ -1,0 +1,4 @@
+name: hfxo-always-on
+build:
+  cmake: .
+  kconfig: Kconfig

@@ -1,0 +1,10 @@
+config KB_HFXO_ALWAYS_ON
+    bool "Keep the 32 MHz crystal (HFXO) running"
+    depends on CLOCK_CONTROL_NRF
+    help
+      Hold a permanent request on the nRF high-frequency clock so the 32 MHz
+      crystal never stops. The ESB TDMA stack switches HFXO off between slots
+      and turns it back on only ~366 us before the next RX window (Nordic's own
+      MPSL budgets 1400 us), so a slow crystal can miss slots and skew the drift
+      estimate, which desyncs the half. Costs roughly 0.25 mA while awake; the
+      clock stops anyway when the half enters deep sleep.
