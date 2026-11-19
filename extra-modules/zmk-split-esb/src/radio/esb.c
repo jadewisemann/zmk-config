@@ -168,7 +168,7 @@ struct pipe_info {
 		       */
 	bool sn;
 	bool nesn;
-	uint8_t tx_try;
+	uint16_t tx_try;
 	bool synced;
 	// bool ack_payload; /* State of the transmission of ACK payloads. */
 };
@@ -872,9 +872,16 @@ void monitoring_work_cb(struct k_work *work)
 K_WORK_DELAYABLE_DEFINE(monitoring_work, monitoring_work_cb);
 #endif
 
+/* Picks the channel of each scan. The scans start in interrupt context, where
+ * the entropy driver behind sys_rand32_get() may not be called (it can block),
+ * and all a scan needs is to spread over the channels.
+ */
+static uint32_t scan_seed;
+
 static void peripheral_setup(void)
 {
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_DISABLED_MASK);
+	scan_seed = sys_rand32_get();
 
 	ctx.pipe = esb_cfg.pipe;
 
@@ -2512,11 +2519,16 @@ static void central_prepare_tx(void)
 	 * keys. Now any poll is enough to get back in.
 	 *
 	 * A synced peripheral answers a control packet, where it stayed silent
-	 * on an empty poll. That also closes a hole in the ARQ: it used to take
+	 * on an empty poll. That also narrows a hole in the ARQ: it used to take
 	 * the empty poll's sequence number without saying so, and then dropped
-	 * the next real payload sent under that number as a duplicate.
+	 * the next real payload sent under that number as a duplicate. Now that
+	 * only happens when its answer is lost on the way.
+	 *
+	 * Not at 2 kHz: the 10 extra bytes there push a full-length answer past
+	 * the end of the central's RX window.
 	 */
-	bool is_ctrl = data_length == 0;
+	bool is_ctrl = !slot_synced ||
+		       (data_length == 0 && CONFIG_ZMK_ESB_POLLING_RATE <= 1000);
 
 	if (is_ctrl) {
 		packet_length += sizeof(struct esb_ctrl_packet);
@@ -2526,7 +2538,7 @@ static void central_prepare_tx(void)
 	}
 
 	/* Only a payload may be popped from the ring when the answer comes in. */
-	pipe_info->tx_try = is_ctrl ? 0 : 1;
+	pipe_info->tx_try = data_length > 0 ? 1 : 0;
 
 	pdu->pdu.ctrl = is_ctrl;
 	pdu->pdu.length = packet_length;
@@ -2610,7 +2622,7 @@ static void central_timeslot_end(void)
 	uint8_t tx_nesn = pipe_info->nesn;
 	uint8_t rx_nesn = rx_pdu->pdu.nesn;
 	uint8_t tx_sn = pipe_info->sn;
-	uint8_t tx_try = pipe_info->tx_try;
+	uint16_t tx_try = pipe_info->tx_try;
 	bool rx_is_ctrl = rx_pdu->pdu.ctrl;
 
 	if (rx_nesn != tx_sn) {
@@ -2718,7 +2730,8 @@ static void peripheral_start_desync(void)
 	esb_state = ESB_STATE_PERIPHERAL_DESYNC;
 	on_radio_disabled = peripheral_disabled_desync;
 
-	esb_addr.rf_channel = get_channel(sys_rand32_get());
+	scan_seed = scan_seed * 1664525U + 1013904223U;
+	esb_addr.rf_channel = get_channel(scan_seed);
 #if CONFIG_ZMK_ESB_WHITEEN
 	nrf_radio_datawhiteiv_set(NRF_RADIO, esb_addr.rf_channel);
 #endif
@@ -2743,7 +2756,16 @@ static void peripheral_disabled_desync(void)
 
 	hfclk_off();
 	bool ctrl = pdu->pdu.ctrl;
-	if (!nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_CRCOK) || !ctrl) {
+	bool crc_ok = nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_CRCOK);
+	if (!crc_ok || !ctrl) {
+		/* A good packet without slot parameters means the central is
+		 * there and has a payload queued for us. Such a scan ends within
+		 * milliseconds, so it does not use up one of the fast ones.
+		 */
+		if (crc_ok && ctx.scan_count > 0) {
+			ctx.scan_count--;
+		}
+
 		peripheral_start_desync();
 		return;
 	}
@@ -2758,18 +2780,32 @@ static void peripheral_disabled_desync(void)
 	 */
 	bool rx_sn = pdu->pdu.sn;
 	bool rx_nesn = pdu->pdu.nesn;
+
+	/* The payload that was in flight when the link dropped: the central's
+	 * nesn says whether it arrived. If it did, pop it now. If not, it stays
+	 * in the ring and is sent again. Either way the TX buffer holds no
+	 * payload any more, so the first exchange pops nothing on its own.
+	 * (It used to pop unconditionally, losing the payload whenever it was
+	 * the uplink that had failed.)
+	 */
+	struct esb_radio_pdu *tx_pdu = (struct esb_radio_pdu *)tx_payload_buffer;
+	if (!tx_pdu->pdu.ctrl && rx_nesn != pipe_info->sn) {
+		pop_tx(0);
+	}
+	tx_pdu->pdu.ctrl = 1;
+
 	pipe_info->sn = !rx_nesn;
 	pipe_info->nesn = rx_sn;
 	pipe_info->tx_try = 0;
 	ctx.desync_count = 0;
-	ctx.scan_count = 0;
 
 	apply_control_packet(packet->data);
 
-	uint32_t sync = nrf_timer_cc_get(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL2) - ctx.addr_delay;
-	uint32_t sync_ticks = k_us_to_ticks_near32(sync);
-	ctx.last_hb = NRF_RTC_WRAP(ctx.start + sync_ticks);
-	ctx.sync_rem_us = (int32_t)sync - (int32_t)k_ticks_to_us_near32(sync_ticks);
+	int32_t sync = (int32_t)nrf_timer_cc_get(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL2) -
+		       (int32_t)ctx.addr_delay;
+	int32_t sync_ticks = us_to_ticks_signed(sync);
+	ctx.last_hb = NRF_RTC_WRAP(ctx.start + (uint32_t)sync_ticks);
+	ctx.sync_rem_us = sync - ticks_to_us_signed(sync_ticks);
 
 	/* Do not wait a whole heartbeat for the first exchange: answer the next
 	 * poll (hb_failed makes that exchange a re-sync). The central then sees
@@ -2777,15 +2813,9 @@ static void peripheral_disabled_desync(void)
 	 * hundred us instead of the length of the scan.
 	 */
 	ctx.hb_failed = true;
-	ctx.scan_margin = MIN(k_us_to_ticks_ceil32(sync / (USEC_PER_SEC / DESYNC_SCAN_MARGIN_PPM)),
+	ctx.scan_margin = MIN(k_us_to_ticks_ceil32((uint32_t)MAX(sync, 0) /
+						   (USEC_PER_SEC / DESYNC_SCAN_MARGIN_PPM)),
 			      DESYNC_SCAN_MARGIN_MAX);
-
-	/* Whatever was in flight when the link dropped was never acknowledged.
-	 * Mark the TX buffer as holding no payload, so the first exchange does not
-	 * pop that data from the ring as if it had been delivered - it is sent
-	 * again instead.
-	 */
-	((struct esb_radio_pdu *)tx_payload_buffer)->pdu.ctrl = 1;
 
 	set_sync_evt_interrupt(ctx.pipe, true);
 #ifdef PERIPHERAL_LOG_DS_END
@@ -2994,6 +3024,10 @@ static void set_sync(int64_t sync)
 	ctx.sync_rem_us = (int32_t)sync - ticks_to_us_signed(sync_ticks);
 	ctx.refslot += ctx.slotdiff;
 	ctx.scan_margin = 0;
+	/* Not when the scan succeeds: a link that syncs but then cannot complete
+	 * an exchange would never fall back to the slow scans.
+	 */
+	ctx.scan_count = 0;
 }
 
 static void peripheral_disabled_rx(void)

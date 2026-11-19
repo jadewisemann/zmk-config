@@ -233,8 +233,11 @@ int send_data_rb(uint8_t pipe, uint8_t type, void *data) {
         return -EINVAL;
     }
 
-    if (esb_tx_start(pipe, data_size + 2) == -ENOMEM) {
-        return -ENOMEM;
+    /* Any failure, not only a full ring: esb_tx_start() takes the interrupt
+     * lock only when it succeeds, and esb_tx_finish() releases it. */
+    int err = esb_tx_start(pipe, data_size + 2);
+    if (err) {
+        return err;
     }
 
     uint8_t header = HEADER;

@@ -83,9 +83,26 @@ Getting sync back:
 - After a scan the half answers the next poll right away and re-measures the
   slot time there, with a wider window for that one exchange.
 - After a scan the half no longer treats the dongle's current sequence number
-  as received (the next payload under it was dropped as a duplicate), and no
-  longer discards the data that was in flight when the link dropped.
+  as received (the next payload under it was dropped as a duplicate). The data
+  that was in flight when the link dropped is discarded only if the dongle's
+  packet shows it arrived; otherwise it is sent again.
 - A synced half answers these control packets where it stayed silent on an
-  empty poll. That removes the same duplicate drop from normal operation: a
-  command from the dongle (backlight, reset, bootloader) sent right after a
-  key press was acknowledged and thrown away.
+  empty poll. A command from the dongle (backlight, reset, bootloader) sent
+  right after a key press used to be acknowledged and thrown away as a
+  duplicate nearly every time; now that needs the half's answer to be lost.
+- The fast scans are given back by the first completed exchange, and a scan
+  that ends on a packet without slot parameters does not use one up.
+
+## Known limits
+
+- 1 kHz is the rate this is meant for. At 2 kHz the slot is too short for the
+  slot parameters in every poll, so the dongle sends them only to a half it
+  has given up on, as before, and recovery takes the old 3 s.
+- Dongle-to-half commands can still be lost or repeated when a packet is lost
+  at the wrong moment: the dongle reuses a sequence number when it replaces a
+  payload-less packet with a command, and re-reads its ring on every
+  retransmission. Key events (half to dongle) are not affected, and
+  whole-key state is re-sent after every reconnect.
+- Nothing here has been measured on hardware. The timing was checked against
+  a model of the arithmetic, the ARQ by tracing sequence numbers through lost
+  packets in both directions.
