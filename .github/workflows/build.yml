@@ -170,11 +170,13 @@ jobs:
   # main keeps one rolling `latest` pre-release that is replaced on every push,
   # so the newest build is always downloadable without piling up releases.
   # Pushing a tag like v1.2.0 publishes a permanent release under that name.
-  # Other branches never release; their files are on the Actions run.
+  # Every other branch shares one rolling `nightly` pre-release: the newest
+  # push to any of them replaces it, and `latest` is left alone. It is for
+  # trying a branch on the keyboard before it is merged.
   release:
     name: Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && github.event_name != 'pull_request')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.ref_type == 'branch' && github.event_name != 'pull_request')
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -191,14 +193,26 @@ jobs:
       # (klotz-esb-left-v1.2.0.uf2, klotz-esb-left-20261114-2ad5930.uf2), and
       # the notes link each one per keyboard and mode.
       - name: Prepare files and notes
+        id: prepare
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             suffix=$GITHUB_REF_NAME
           else
             suffix=$(TZ=Asia/Seoul git log -1 --date=format-local:%Y%m%d --format=%cd)-${GITHUB_SHA::7}
           fi
-          tag=$([ "$GITHUB_REF_TYPE" = tag ] && echo "$GITHUB_REF_NAME" || echo latest)
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag=$GITHUB_REF_NAME
+          elif [ "$GITHUB_REF_NAME" = main ]; then
+            tag=latest
+          else
+            tag=nightly
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           yq -o=json devices.yaml | python3 scripts/release.py firmware "$tag" "$suffix" "$(git log -1 --format=%B)"
+          if [ "$tag" = nightly ]; then
+            { echo "Test build of branch \`$GITHUB_REF_NAME\`, not merged into \`main\`."; echo; cat notes.md; } > notes.tmp
+            mv notes.tmp notes.md
+          fi
 
       - name: Publish version
         if: github.ref_type == 'tag'
@@ -206,9 +220,11 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.uf2 --verify-tag \
             --title "$GITHUB_REF_NAME" --notes-file notes.md
 
-      - name: Replace latest
+      - name: Replace latest or nightly
         if: github.ref_type == 'branch'
+        env:
+          TAG: ${{ steps.prepare.outputs.tag }}
         run: |
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest dist/*.uf2 --prerelease --latest=false \
-            --target "$GITHUB_SHA" --title "latest (${GITHUB_SHA::7})" --notes-file notes.md
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" dist/*.uf2 --prerelease --latest=false \
+            --target "$GITHUB_SHA" --title "$TAG (${GITHUB_SHA::7})" --notes-file notes.md

@@ -29,7 +29,8 @@ Positions 0-33 are the same on every keyboard; TOTEM's and TC36K's extra keys co
 Every push to `main` builds all firmware in parallel and replaces the single `latest`
 pre-release, so the newest build is always on the Releases page. Pushing a tag such as
 `v1.2.0` (`git tag v1.2.0 && git push origin v1.2.0`) publishes a permanent release under
-that name. Other branches build without releasing (the files are on the Actions run).
+that name. A push to any other branch replaces the single `nightly` pre-release, for
+trying that branch on a keyboard before it is merged; `latest` is not touched.
 
 ### Adding a keyboard
 
