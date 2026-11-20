@@ -2,7 +2,8 @@
 
 Each firmware is `shield/board defaults` + the mode files below (applied in the
 order listed in `scripts/matrix.py`) + the device's own files in
-`config/devices/<device>/`. Later files win.
+`config/devices/<device>/` (`half.conf` for its halves, `dongle.conf` for its dongle,
+`ble.conf` for every one of its Bluetooth builds). Later files win.
 
 | file | used by |
 |---|---|

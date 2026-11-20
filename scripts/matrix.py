@@ -30,19 +30,20 @@ def targets(dev_id, dev, dongle_board):
     board, shield = dev["board"], dev["shield"]
     half = optional(f"{d}/half.conf")
     dongle = optional(f"{d}/dongle.conf")
+    ble = optional(f"{d}/ble.conf")  # every Bluetooth build of this device
     for m in dev["modes"]:
         if m == "ble":
-            yield m, "left", board, f"{shield}_left", mode("half", "ble", "ble_central") + half, []
-            yield m, "right", board, f"{shield}_right", mode("half", "ble") + half, []
+            yield m, "left", board, f"{shield}_left", mode("half", "ble", "ble_central") + half + ble, []
+            yield m, "right", board, f"{shield}_right", mode("half", "ble") + half + ble, []
         elif m == "bleright":
-            yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half, []
+            yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half + ble, []
             yield (m, "right", board, f"{shield}_right",
-                   mode("half", "ble", "central", "ble_central") + half, [])
+                   mode("half", "ble", "central", "ble_central") + half + ble, [])
         elif m == "bledongle":
-            yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half, []
-            yield m, "right", board, f"{shield}_right", mode("half", "ble") + half, []
+            yield m, "left", board, f"{shield}_left", mode("half", "ble", "peripheral") + half + ble, []
+            yield m, "right", board, f"{shield}_right", mode("half", "ble") + half + ble, []
             yield (m, "dongle", dongle_board, "kb_dongle",
-                   mode("ble", "ble_central", "ble_dongle") + dongle, [f"{d}/dongle.overlay"])
+                   mode("ble", "ble_central", "ble_dongle") + dongle + ble, [f"{d}/dongle.overlay"])
         elif m == "esb":
             esb = [f"{d}/esb.overlay"]
             yield m, "left", board, f"{shield}_left", mode("half", "esb", "esb_half", "esb_left", "peripheral") + half, esb

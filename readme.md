@@ -24,6 +24,9 @@ Each release attaches every `.uf2` with the release in its name, e.g.
 its notes link them in one table per keyboard. Flash every part of a mode from the same
 release, and flash the keyboard's settings reset on every part first when switching modes.
 
+TOTEM pairs without a passkey (`config/devices/totem/ble.conf`): it is used with macOS,
+where entering the passkey does not complete pairing. The other keyboards still ask for one.
+
 Positions 0-33 are the same on every keyboard; TOTEM's and TC36K's extra keys come after them and are unbound for now.
 
 Every push to `main` builds all firmware in parallel and replaces the single `latest`
