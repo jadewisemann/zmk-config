@@ -11,11 +11,12 @@ Bluetooth split tests work the same way.
 
 ## What a run does
 
-The left half holds its thumb key (Nav on hold, Space on tap) and the right
-half presses J while it is held, which is Left on the Nav layer. A lost or
-late thumb event types `J` instead, and that is exactly what a keyboard with a
-struggling link does. Every cycle must type `Left`, and no half may lose sync
-after its start-up scan.
+Most scenarios use one gesture: the left half holds its thumb key (Nav on
+hold, Space on tap) and the right half presses J while it is held, which is
+Left on the Nav layer. A lost or late thumb event types `J` instead, and that
+is exactly what a keyboard with a struggling link does. Every scenario states
+what the dongle has to type, and the halves that are meant to work may not
+lose sync after their start-up scan.
 
 | scenario | condition |
 |---|---|
@@ -25,11 +26,17 @@ after its start-up scan.
 | `fast1000` | right half's clock 1000 ppm fast |
 | `dongle1000` | dongle's clock 1000 ppm fast, so both halves are slow |
 | `loss30` | 30 % of all packets lost, clocks 300 and 200 ppm off |
-| `long` (`--long`) | 12 minutes across the wrap of the 24-bit RTC, 5 % loss |
+| `long` | 12 minutes across the wrap of the 24-bit RTC, 5 % loss |
+| `rolls` | both hands alternate, 35 ms from key to key with the keys overlapping, 5 % loss: the letters must come out in order |
+| `late` | the left half is switched on 10 s after the dongle |
+| `stall` | every 3 s the dongle is held up while preparing a slot, so nothing starts that slot: its watchdog has to restart the slot sequence |
+| `other-half` | the left half has another protocol version: it must not sync, and only `J` is typed |
+| `old-half` | the left half syncs to any dongle, like firmware from before the version check: the dongle must not take its keys |
 
 `slow80` is what the firmware up to `1365f2b` failed, and `slow1000` what it
 failed up to `27a86b8`: both type `J` there (the older one also a late
-`Space`), with the left half scanning for the dongle over and over.
+`Space`), with the left half scanning for the dongle over and over. Without
+the watchdog, `stall` types nothing at all after the first three seconds.
 
 ## Running it
 
@@ -39,10 +46,13 @@ Needs `west`, `cmake`, `ninja`, `dtc` and a 32-bit capable `gcc`
 
 ```sh
 python3 tests/esb/run.py setup ~/esb-sim          # once, and after a west.yml change
-python3 tests/esb/run.py test  ~/esb-sim          # ~3 minutes
-python3 tests/esb/run.py test  ~/esb-sim --long   # ~5 minutes
-python3 tests/esb/run.py test  ~/esb-sim --only slow1000
+python3 tests/esb/run.py test  ~/esb-sim          # ~5 minutes
+python3 tests/esb/run.py test  ~/esb-sim --only slow1000 --only stall
+python3 tests/esb/run.py list
 ```
+
+CI runs all of it on every push that touches the ESB firmware, the keymap or
+this test (`.github/workflows/esb-test.yml`).
 
 The logs of every device end up in `<workspace>/esb-test/<scenario>/`. The
 dongle's log has the link statistics once per second and every key event as it
@@ -60,7 +70,10 @@ are right. It says nothing about:
   On a board whose 32 kHz clock is the RC oscillator they do not, which
   matters for how a scan converts its time into slot times;
 - code execution time, beyond the fixed interrupt latency of
-  `CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US`.
+  `CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US`;
+- a half that is switched off, or goes to deep sleep, in the middle of a run,
+  and clocks whose error changes while it runs: a simulated device runs from
+  start to end with one fixed clock error.
 
 For those the link reports on itself on real hardware: the `dongle-log`
 firmware.
@@ -77,8 +90,11 @@ know Bluetooth and 802.15.4:
 - the end of a reception takes effect at once. The model scheduled it for
   "now", which let the handler of an interrupt raised in the same microsecond
   run first and re-arm the radio; a real radio is done long before any handler
-  runs.
+  runs;
+- no warning for an RSSI measurement started during a transmission, which the
+  radio layer's shortcut does once per slot.
 
 The firmware itself is not changed for the test. It has two guards for the
-simulated board (no reset cause, no battery) and one option,
-`CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US`.
+simulated board (no reset cause, no battery) and three options that exist only
+there: `CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US`, `CONFIG_ZMK_ESB_SIM_STALL_EVERY`
+and `CONFIG_ZMK_ESB_SIM_SKIP_VERSION_CHECK`.

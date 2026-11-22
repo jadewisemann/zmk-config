@@ -292,6 +292,7 @@ static struct esb_tdma_context {
 	uint32_t drift_span;   // ticks the drift estimate was measured over (at most a heartbeat)
 
 	bool is_hb; // true if current slot is heartbeat
+	bool hello_pending; // the first packet after a scan has to be the self-report
 	bool hb_failed;
 	bool more_data;
 } ctx;
@@ -301,6 +302,7 @@ struct esb_ctrl_packet {
 	uint32_t slotsize_ticks;
 	uint8_t addr_delay;
 	uint8_t pipes;
+	uint8_t version; /* ESB_PROTOCOL_VERSION of the central */
 } __packed;
 
 struct esb_header_dn {
@@ -516,6 +518,7 @@ static void set_control_packet(void *data)
 	control->addr_delay = ctx.addr_delay;
 	control->pipes = ctx.pipes;
 	control->refslot = ctx.refslot;
+	control->version = ESB_PROTOCOL_VERSION;
 }
 
 static void apply_control_packet(void *data)
@@ -815,6 +818,7 @@ static inline int32_t drift_get_ticks(uint32_t clock_diff)
 #if ESB_CENTRAL
 static struct esb_pipe_stats link_stats[ESB_PIPE_COUNT];
 static uint32_t slots_skipped;
+static uint32_t slots_stalled;
 
 int esb_get_pipe_stats(uint8_t pipe, struct esb_pipe_stats *stats)
 {
@@ -826,6 +830,7 @@ int esb_get_pipe_stats(uint8_t pipe, struct esb_pipe_stats *stats)
 
 	*stats = link_stats[pipe];
 	stats->slots_skipped = slots_skipped;
+	stats->slots_stalled = slots_stalled;
 	stats->rssi = rssi_get(pipe);
 	stats->synced = is_slot_synced(pipe);
 
@@ -900,7 +905,7 @@ static uint8_t peer_stats_fill(uint8_t *data)
 
 	queue_wait_roll(nrfx_rtc_counter_get(&esb_rtc));
 
-	stats->version = ESB_PEER_STATS_VERSION;
+	stats->version = ESB_PROTOCOL_VERSION;
 	stats->rx_timeouts = self_stats.rx_timeouts;
 	stats->tx_retries = self_stats.tx_retries;
 	stats->scans = self_stats.scans;
@@ -1119,6 +1124,7 @@ static void (*update_rf_payload_format)(uint32_t payload_length);
 
 static void central_prepare_tx(void);
 static void central_timeslot_end(void);
+static void central_watchdog(void);
 
 static void peripheral_start_desync(void);
 static void peripheral_disabled_desync(void);
@@ -1901,9 +1907,13 @@ static void esb_rtc_handler(nrf_rtc_event_t event_type, void *context)
 
 	if (nrfy_rtc_int_enable_check(esb_rtc.p_reg, NRF_RTC_INT_COMPARE1_MASK)) {
 		nrfy_rtc_event_clear(esb_rtc.p_reg, NRF_RTC_EVENT_COMPARE_1);
+#if ESB_CENTRAL
+		central_watchdog();
+#else
 		if (on_timer_compare1 != NULL) {
 			on_timer_compare1();
 		}
+#endif
 	}
 }
 
@@ -2674,6 +2684,14 @@ static void central_prepare_tx(void)
 	uint32_t next_slot = ctx.refslot + slot_diff;
 	uint32_t timeout = ctx.slotsize_us - TIMEOUT_MARGIN_US;
 
+#if defined(CONFIG_ZMK_ESB_SIM_STALL_EVERY) && (CONFIG_ZMK_ESB_SIM_STALL_EVERY > 0)
+	static uint32_t prepared;
+
+	if (++prepared % CONFIG_ZMK_ESB_SIM_STALL_EVERY == 0) {
+		k_busy_wait(2 * ctx.slotsize_us);
+	}
+#endif
+
 	nrfy_rtc_cc_set(esb_rtc.p_reg, 0, tx_start);
 	nrfy_timer_cc_set(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL1, timeout);
 
@@ -2749,6 +2767,22 @@ static void central_prepare_tx(void)
 
 	ppi_for_txrx_set(true, true);
 
+	/* Every slot is started by the compare armed above and ended by an
+	 * interrupt of the timer that slot starts; preparing the next one from
+	 * there is all that keeps the sequence going. If this function is ever
+	 * held up until the compare value has passed, nothing starts the slot and
+	 * nothing ends it: the radio stays silent until the 24-bit counter comes
+	 * round again, 512 s later, and the whole keyboard is dead meanwhile. So a
+	 * second compare, moved on with every slot, restarts the sequence if no
+	 * slot was prepared for three slot lengths. It is set from the counter as
+	 * it is now, not from the slot time, so it cannot be in the past itself.
+	 */
+	nrfy_rtc_cc_set(esb_rtc.p_reg, 1,
+			NRF_RTC_WRAP(nrfx_rtc_counter_get(&esb_rtc) + 3 * ctx.slotsize_ticks));
+	if (esb_state != ESB_STATE_CENTRAL_TX) {
+		rtc_irq_enable();
+	}
+
 	esb_state = ESB_STATE_CENTRAL_TX;
 
 #ifdef CENTRAL_LOG_TS_START
@@ -2757,6 +2791,19 @@ static void central_prepare_tx(void)
 		pipe_info->sn, pipe_info->nesn, slot_synced, pdu->pdu.ctrl,
 		nrf_radio_datawhiteiv_get(NRF_RADIO));
 #endif
+}
+
+static void central_watchdog(void)
+{
+	slots_stalled++;
+
+	crcok_irq_disable();
+	timer_irq_disable();
+	ppi_for_txrx_clear();
+	nrf_timer_task_trigger(esb_timer.p_reg, NRF_TIMER_TASK_SHUTDOWN);
+	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_DISABLE);
+
+	central_prepare_tx();
 }
 
 static void central_timeslot_end(void)
@@ -2792,6 +2839,7 @@ static void central_timeslot_end(void)
 			if (!slot_sync_check(pipe, start)) {
 				rssi_reset(pipe);
 				link_stats[resolve_pipe(pipe)].sync_lost++;
+				link_stats[resolve_pipe(pipe)].peer_valid = false;
 				set_sync_evt_interrupt(pipe, false);
 			}
 		}
@@ -2845,10 +2893,17 @@ static void central_timeslot_end(void)
 			 * that a peripheral resends as a control packet.
 			 */
 			if (rx_len == sizeof(struct esb_peer_stats) &&
-			    rx_pdu->data[0] == ESB_PEER_STATS_VERSION) {
+			    rx_pdu->data[0] == ESB_PROTOCOL_VERSION) {
 				memcpy(&stats->peer, rx_pdu->data, sizeof(stats->peer));
 				stats->peer_valid = true;
 			}
+		} else if (!stats->peer_valid) {
+			/* Not from a peripheral known to speak this protocol
+			 * version: neither taken nor acknowledged. One that does
+			 * sends its self-report first after every scan, so this
+			 * only ever meets firmware from another release.
+			 */
+			stats->refused++;
 		} else if (push_rx_fifo(pipe, rx_sn, rx_len, rx_pdu->data)) {
 			pipe_info->crc = crc;
 			pipe_info->nesn = (!pipe_info->nesn);
@@ -2970,6 +3025,19 @@ static void peripheral_disabled_desync(void)
 		return;
 	}
 
+	/* Slot parameters of a central with another protocol version are not for
+	 * us: its packets or its timing differ in ways this side does not know.
+	 * A central from before the version existed sends a shorter packet.
+	 */
+	const struct esb_ctrl_packet *control = (const struct esb_ctrl_packet *)packet->data;
+
+	if (!IS_ENABLED(CONFIG_ZMK_ESB_SIM_SKIP_VERSION_CHECK) &&
+	    (pdu->pdu.length < sizeof(struct esb_header_dn) + sizeof(struct esb_ctrl_packet) ||
+	     control->version != ESB_PROTOCOL_VERSION)) {
+		peripheral_start_desync();
+		return;
+	}
+
 	drift_reset();
 
 	/* sn: nothing of ours is waiting for an acknowledgement.
@@ -3014,6 +3082,7 @@ static void peripheral_disabled_desync(void)
 	 * hundred us instead of the length of the scan.
 	 */
 	ctx.hb_failed = true;
+	ctx.hello_pending = true;
 	ctx.scan_margin = MIN(k_us_to_ticks_ceil32((uint32_t)MAX(sync, 0) /
 						   (USEC_PER_SEC / DESYNC_SCAN_MARGIN_PPM)),
 			      DESYNC_SCAN_MARGIN_MAX);
@@ -3350,7 +3419,12 @@ static void peripheral_disabled_rx(void)
 			queue_wait_end();
 		}
 
-		tx_len = copy_tx(0, tx_pdu->data);
+		/* The first packet after a scan is the self-report, whatever is
+		 * queued: the central takes payloads only once it has seen the
+		 * protocol version in one.
+		 */
+		tx_len = ctx.hello_pending ? 0 : copy_tx(0, tx_pdu->data);
+		ctx.hello_pending = false;
 		pipe_info->tx_try = 0;
 
 		/* A packet without a payload carries this side's link statistics.

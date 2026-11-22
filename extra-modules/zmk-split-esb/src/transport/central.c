@@ -93,10 +93,11 @@ static void link_stats_work_cb(struct k_work *work) {
         const struct esb_peer_stats *peer_prev = &prev[i].peer;
 
         LOG_INF("ESB half %d %s rssi -%u answers %u keys %u dup %u lost(total) %u "
-                "skipped %u",
+                "skipped %u stalled(total) %u refused %u",
                 i, now.synced ? "up" : "DOWN", now.rssi, now.answers - prev[i].answers,
                 now.payloads - prev[i].payloads, now.duplicates - prev[i].duplicates,
-                now.sync_lost, now.slots_skipped - prev[i].slots_skipped);
+                now.sync_lost, now.slots_skipped - prev[i].slots_skipped, now.slots_stalled,
+                now.refused - prev[i].refused);
 
         if (now.peer_valid) {
             LOG_INF("ESB half %d reports: timeouts %u retries %u scans(total) %u wait %u ms "
@@ -107,7 +108,9 @@ static void link_stats_work_cb(struct k_work *work) {
                     (peer->clocks & ESB_PEER_CLOCK_LF_XTAL) ? "crystal" : "RC",
                     (peer->clocks & ESB_PEER_CLOCK_HF_WAS_OFF) ? "WAS-OFF" : "ok");
         } else {
-            LOG_INF("ESB half %d reports: nothing yet (a half with older firmware never does)", i);
+            LOG_INF("ESB half %d reports: nothing usable (not connected, or its firmware is "
+                    "from another release)",
+                    i);
         }
 
         prev[i] = now;

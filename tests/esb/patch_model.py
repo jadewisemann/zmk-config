@@ -101,6 +101,13 @@ def radio(s):
     } else {
       nhwra_set_Timer_RADIO(nsi_hws_get_time() + nhwra_timings_get_RX_rampdown_time());
     }""")
+    # The radio layer shorts ADDRESS to RSSISTART for both directions. In a
+    # transmission that measures nothing, and warning about it once per slot
+    # makes the logs hundreds of megabytes.
+    old = """    bs_trace_warning_time_line("TASK_RSSISTART received while the radio was not in Rx. "
+                               "The spec does not allow this. We just use the last Rx value in the model\\n");"""
+    assert s.count(old) == 1
+    s = s.replace(old, "    /* no warning */")
     old = "    NRF_RADIO_regs.RXMATCH = 0; //The only we support so far"
     assert s.count(old) == 1
     s = s.replace(old, "    { extern uint nhwra_esb_rx_logical_addr(void); NRF_RADIO_regs.RXMATCH = nhwra_esb_rx_logical_addr(); }")

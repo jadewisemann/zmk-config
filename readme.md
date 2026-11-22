@@ -48,7 +48,8 @@ Shared settings live in `config/modes/` (see its README); per-keyboard settings 
 `config/devices/<id>/`.
 
 The ESB link has a test that runs the dongle and both halves in a simulator:
-`tests/esb` (see its README).
+`tests/esb` (see its README). CI runs it when the ESB firmware or the keymap
+changes.
 
 ## English and Korean
 

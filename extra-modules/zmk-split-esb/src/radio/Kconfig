@@ -45,6 +45,25 @@ config ZMK_ESB_EVENT_IRQ_PRIORITY
 	range 0 6
 	default 2
 
+config ZMK_ESB_PROTOCOL_VERSION
+	int "Version of the link protocol"
+	range 1 255
+	default 4
+	help
+	  Changes whenever the packets or the timing rules of the link change.
+	  The dongle sends it with the slot parameters and a half sends it with
+	  its self-report. A half does not sync to a dongle with another
+	  version, and the dongle takes no key events from a half it has not
+	  seen the right version from: a half with firmware from another
+	  release is plainly dead instead of nearly working. Not a setting;
+	  it is an option so that the tests can build a mismatch.
+
+config ZMK_ESB_SIM_SKIP_VERSION_CHECK
+	bool "Sync to a dongle of any protocol version (tests/esb only)"
+	depends on ARCH_POSIX && !ZMK_ESB_CENTRAL
+	help
+	  Stands in for a half with firmware from before the version check.
+
 config ZMK_ESB_SIM_ISR_LATENCY_US
 	int "Simulated interrupt latency (tests/esb only)"
 	depends on ARCH_POSIX
@@ -55,6 +74,16 @@ config ZMK_ESB_SIM_ISR_LATENCY_US
 	  needs some tens of microseconds to get there and through the handler.
 	  This makes every radio-layer interrupt handler start that much later,
 	  so the tests also cover the time the handlers have.
+
+config ZMK_ESB_SIM_STALL_EVERY
+	int "Make the central miss a slot every N slots (tests/esb only)"
+	depends on ARCH_POSIX && ZMK_ESB_CENTRAL
+	default 0
+	help
+	  Every N-th time the central prepares a slot it takes two slots too
+	  long, so the compare that should start the slot is armed in the past.
+	  Nothing starts that slot then, and nothing ends it. For testing that
+	  the central gets out of this by itself.
 
 config ZMK_ESB_TX_RINGBUF_SIZE
 	int "set tx ringbuf size"

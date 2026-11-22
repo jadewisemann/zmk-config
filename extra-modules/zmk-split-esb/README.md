@@ -100,6 +100,26 @@ Getting sync back:
 - The fast scans are given back by the first completed exchange, and a scan
   that ends on a packet without slot parameters does not use one up.
 
+## Guard rails
+
+- **The dongle restarts its slot sequence.** Every slot is started by a
+  compare of the 32 kHz counter and ended by an interrupt of the timer that
+  slot starts; preparing the next slot from there is all that keeps the
+  sequence going. Held up once for longer than the ~100 us it has, the dongle
+  armed a compare value that had already passed: nothing started the slot,
+  nothing ended it, and the radio stayed silent until the counter came round
+  again 512 s later - the whole keyboard dead until the dongle was plugged in
+  again. A second compare, moved on with every slot, now restarts the
+  sequence within three slots (`stalled` in the statistics counts these).
+- **Firmware of different releases does not half-work.** The dongle sends a
+  protocol version with the slot parameters and a half sends it with its
+  self-report (`CONFIG_ZMK_ESB_PROTOCOL_VERSION`; raise its default whenever
+  the packets or the timing rules change). A half does not sync to a dongle
+  with another version, and the dongle takes no key events from a half it
+  has not seen its own version from, which a half therefore sends first
+  after every scan. Before, a half with older firmware connected and was
+  merely slow, which looked like a bad link.
+
 ## Link statistics
 
 The link is tested in simulation (`tests/esb`), which covers the logic but
@@ -116,7 +136,7 @@ on macOS, PuTTY on the COM port on Windows) and it prints, once per second and
 half (half 0 is the left one):
 
 ```
-ESB half 0 up rssi -58 answers 4 keys 0 dup 0 lost(total) 0 skipped 0
+ESB half 0 up rssi -58 answers 4 keys 0 dup 0 lost(total) 0 skipped 0 stalled(total) 0 refused 0
 ESB half 0 reports: timeouts 0 retries 0 scans(total) 1 wait 3 ms power -4 dBm drift -12 ppm 32k crystal 32M ok
 ESB key: half 0 position 30 down
 ```
@@ -130,6 +150,8 @@ ESB key: half 0 position 30 down
 | `dup` | key packets received twice (the dongle's acknowledgement was lost) | 0, now and then 1 |
 | `lost(total)` | times the dongle gave up on the half (3 s of silence) | stays the same |
 | `skipped` | slots the dongle could not prepare in time (both halves) | 0 |
+| `stalled(total)` | times the dongle's slot sequence stopped and its watchdog restarted it | 0 |
+| `refused` | key packets not taken because the half has not shown this dongle's protocol version | 0 |
 | `timeouts` | RX windows of the half that stayed empty | 0, a few while typing |
 | `retries` | packets of the half the dongle did not acknowledge | 0, a few while typing |
 | `scans(total)` | times the half lost sync and searched for the dongle | stays the same after start-up |
@@ -141,8 +163,8 @@ ESB key: half 0 position 30 down
 
 `wait` is the number that says whether the radio is what makes a key late.
 The `ESB key` lines show the order in which the dongle saw the key events.
-A half that prints `reports: nothing yet` forever runs firmware from before
-the statistics were added.
+A half that prints `reports: nothing usable` forever is switched off, or runs
+firmware from another release (then `refused` counts up, or `answers` stays 0).
 
 ## Known limits
 

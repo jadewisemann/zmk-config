@@ -669,8 +669,8 @@ uint8_t esb_get_slot_state(void);
 
 int esb_conn_cb_register(struct esb_conn_cb *cb);
 
-/** Marks a peripheral's self-report; changes whenever its layout does. */
-#define ESB_PEER_STATS_VERSION 0xD3
+/** Version of the link protocol; see CONFIG_ZMK_ESB_PROTOCOL_VERSION. */
+#define ESB_PROTOCOL_VERSION CONFIG_ZMK_ESB_PROTOCOL_VERSION
 
 /** @brief What a peripheral reports about its own side of the link.
  *
@@ -679,7 +679,7 @@ int esb_conn_cb_register(struct esb_conn_cb *cb);
  *  of its own. The counters are cumulative and wrap.
  */
 struct esb_peer_stats {
-	uint8_t version;      /**< ESB_PEER_STATS_VERSION. */
+	uint8_t version;      /**< ESB_PROTOCOL_VERSION of the peripheral. */
 	uint8_t rx_timeouts;  /**< RX windows that ended without a packet. */
 	uint8_t tx_retries;   /**< Packets the central did not acknowledge. */
 	uint8_t scans;	      /**< Scans started, i.e. times sync was lost. */
@@ -706,10 +706,17 @@ struct esb_pipe_stats {
 	uint32_t payloads;      /**< Answers that carried a new payload. */
 	uint32_t duplicates;    /**< Payloads received again (our acknowledgement was lost). */
 	uint32_t sync_lost;     /**< Times this pipe went silent for too long. */
+	uint32_t refused;       /**< Payloads not taken because @c peer_valid was not set. */
 	uint32_t slots_skipped; /**< Slots the central could not prepare in time (all pipes). */
+	uint32_t slots_stalled; /**< Times the slot sequence stopped and the watchdog
+				 *   restarted it (all pipes).
+				 */
 	uint8_t rssi;	        /**< Averaged signal strength of the answers, -dBm. */
 	bool synced;	        /**< The pipe currently counts as connected. */
-	bool peer_valid;        /**< @c peer holds a report from the peripheral. */
+	bool peer_valid;        /**< @c peer holds a report with this side's protocol
+				 *   version, received since the pipe was last lost.
+				 *   Payloads are only taken while it is set.
+				 */
 	struct esb_peer_stats peer;
 };
 

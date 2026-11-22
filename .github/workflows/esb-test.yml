@@ -1,0 +1,73 @@
+name: ESB link test
+
+# Runs the dongle and both halves in a simulator (tests/esb) whenever something
+# the ESB firmware is built from changes. It does not hold up the firmware
+# release; a failure shows as a failed check on the commit.
+on:
+  push:
+    paths:
+      - ".github/workflows/esb-test.yml"
+      - "tests/esb/**"
+      - "extra-modules/**"
+      - "config-esb/**"
+      - "config/modes/esb*"
+      - "config/keymap/**"
+      - "config/devices/klotz/**"
+  pull_request:
+    paths:
+      - ".github/workflows/esb-test.yml"
+      - "tests/esb/**"
+      - "extra-modules/**"
+      - "config-esb/**"
+      - "config/modes/esb*"
+      - "config/keymap/**"
+      - "config/devices/klotz/**"
+  workflow_dispatch:
+
+concurrency:
+  group: esb-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulate:
+    name: Simulate the link
+    runs-on: ubuntu-latest
+    container:
+      image: zmkfirmware/zmk-build-arm:stable
+    steps:
+      - uses: actions/checkout@v7
+
+      # The west workspace the firmware builds use (build.yml saves it). The
+      # simulator and its hardware models are fetched on top of it.
+      - name: Restore west workspace
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            modules/
+            tools/
+            zephyr/
+            bootloader/
+            zmk/
+            nrf/
+            nrfxlib/
+            optional/
+          key: west-v2-config-esb-${{ hashFiles('config-esb/west.yml') }}
+          restore-keys: |
+            west-v2-config-esb-
+            west-config-esb-
+
+      - name: Set up the simulator
+        run: python3 tests/esb/run.py setup .
+
+      - name: Run the scenarios
+        run: python3 tests/esb/run.py test .
+
+      - name: Keep the logs of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: esb-test-logs
+          path: |
+            esb-test/**/*.log
+            bsim-build.log
+          retention-days: 7
