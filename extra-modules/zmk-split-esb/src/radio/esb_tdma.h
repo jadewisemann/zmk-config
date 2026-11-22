@@ -668,6 +668,46 @@ bool esb_is_initialized(void);
 uint8_t esb_get_slot_state(void);
 
 int esb_conn_cb_register(struct esb_conn_cb *cb);
+
+/** Marks a peripheral's self-report; changes whenever its layout does. */
+#define ESB_PEER_STATS_VERSION 0xD1
+
+/** @brief What a peripheral reports about its own side of the link.
+ *
+ *  Sent as the body of every packet that carries no payload (the answer to a
+ *  heartbeat, and the last packet of every exchange), so it costs no air time
+ *  of its own. The counters are cumulative and wrap.
+ */
+struct esb_peer_stats {
+	uint8_t version;      /**< ESB_PEER_STATS_VERSION. */
+	uint8_t rx_timeouts;  /**< RX windows that ended without a packet. */
+	uint8_t tx_retries;   /**< Packets the central did not acknowledge. */
+	uint8_t scans;	      /**< Scans started, i.e. times sync was lost. */
+	uint8_t queue_max_ms; /**< Longest wait of a payload, from being queued until
+			       *   it was acknowledged, in the last 1-2 s. 255: more.
+			       */
+	int8_t tx_power;      /**< Current TX power, dBm. */
+	int8_t drift_us;      /**< Clock drift estimate, us per heartbeat. */
+} __packed;
+
+/** @brief Link statistics of one pipe, as the central sees it. Cumulative. */
+struct esb_pipe_stats {
+	uint32_t answers;       /**< Polls that were answered. */
+	uint32_t payloads;      /**< Answers that carried a new payload. */
+	uint32_t duplicates;    /**< Payloads received again (our acknowledgement was lost). */
+	uint32_t sync_lost;     /**< Times this pipe went silent for too long. */
+	uint32_t slots_skipped; /**< Slots the central could not prepare in time (all pipes). */
+	uint8_t rssi;	        /**< Averaged signal strength of the answers, -dBm. */
+	bool synced;	        /**< The pipe currently counts as connected. */
+	bool peer_valid;        /**< @c peer holds a report from the peripheral. */
+	struct esb_peer_stats peer;
+};
+
+/** @brief Read the link statistics of a pipe. Central only.
+ *
+ *  @retval 0 If successful, -EINVAL for a pipe that does not exist.
+ */
+int esb_get_pipe_stats(uint8_t pipe, struct esb_pipe_stats *stats);
 /** @} */
 
 #ifdef __cplusplus

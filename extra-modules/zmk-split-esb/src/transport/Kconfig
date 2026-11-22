@@ -45,6 +45,16 @@ config ZMK_SPLIT_ESB_SEND_WHOLE_KEY
     bool "send whole key state"
     default n
 
+config ZMK_SPLIT_ESB_LINK_STATS
+    bool "Log link statistics once per second"
+    depends on ZMK_SPLIT_ESB_ROLE_CENTRAL
+    help
+        The central logs, for every half, how the link did in the last second
+        (answers, retries, lost sync, signal strength, and how long the half's
+        key events waited before they were acknowledged) and every key event
+        as it arrives. Needs a log backend, e.g. the zmk-usb-logging snippet.
+        See the module README for how to read the lines.
+
 module = ZMK_SPLIT_ESB
 module-str = ZMK_SPLIT_ESB
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"

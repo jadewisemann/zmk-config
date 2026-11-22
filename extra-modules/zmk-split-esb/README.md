@@ -93,6 +93,47 @@ Getting sync back:
 - The fast scans are given back by the first completed exchange, and a scan
   that ends on a packet without slot parameters does not use one up.
 
+## Link statistics
+
+Nothing above has been measured on hardware, so the link reports on itself.
+
+Every half counts what happens on its side and sends the counts to the dongle
+in the packets that carry no payload (`struct esb_peer_stats`); that is always
+on and costs no air time. The dongle counts per half as well. Printing is a
+separate firmware: `<keyboard>-esb-dongle-log.uf2` is the ESB dongle built with
+the `zmk-usb-logging` snippet and `CONFIG_ZMK_SPLIT_ESB_LINK_STATS=y`
+(`config/modes/esb_log.conf`). It works as a dongle like the normal one and is
+a USB serial port besides. Open that port (`screen /dev/tty.usbmodem* 115200`
+on macOS, PuTTY on the COM port on Windows) and it prints, once per second and
+half (half 0 is the left one):
+
+```
+ESB half 0 up rssi -58 answers 4 keys 0 dup 0 lost(total) 0 skipped 0
+ESB half 0 reports: timeouts 0 retries 0 scans(total) 1 wait 3 ms power -4 dBm drift 2 us
+ESB key: half 0 position 30 down
+```
+
+| field | meaning | healthy |
+|---|---|---|
+| `up` / `DOWN` | whether the dongle counts the half as connected | `up` |
+| `rssi` | signal strength of the half at the dongle, dBm | -45 to -70 |
+| `answers` | polls the half answered in that second | 4 when idle (the heartbeats), more while typing |
+| `keys` | answers that carried key events | |
+| `dup` | key packets received twice (the dongle's acknowledgement was lost) | 0, now and then 1 |
+| `lost(total)` | times the dongle gave up on the half (3 s of silence) | stays the same |
+| `skipped` | slots the dongle could not prepare in time (both halves) | 0 |
+| `timeouts` | RX windows of the half that stayed empty | 0, a few while typing |
+| `retries` | packets of the half the dongle did not acknowledge | 0, a few while typing |
+| `scans(total)` | times the half lost sync and searched for the dongle | stays the same after start-up |
+| `wait` | longest time a key event waited in the half, from the key scan until the dongle acknowledged it, over the last 1-2 s | 2-6 ms |
+| `power` | TX power the half has settled on | |
+| `drift` | how far the half's clock runs off the dongle's per heartbeat | a few us, steady |
+
+`wait` is the number that says whether the radio is what makes a key late.
+The `ESB key` lines show the order in which the dongle saw the key events.
+A half that prints `reports: nothing yet` forever runs firmware from before
+the statistics were added.
+
 ## Known limits
 
 - 1 kHz is the rate this is meant for. At 2 kHz the slot is too short for the

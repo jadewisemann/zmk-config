@@ -49,6 +49,10 @@ def targets(dev_id, dev, dongle_board):
             yield m, "right", board, f"{shield}_right", mode("half", "esb", "esb_half", "esb_right") + half, esb
             yield (m, "dongle", dongle_board, "kb_dongle",
                    mode("esb", "esb_dongle") + dongle, [f"{d}/dongle.overlay"] + esb)
+            # The same dongle with link diagnostics on a USB serial port.
+            yield (m, "dongle-log", dongle_board, "kb_dongle",
+                   mode("esb", "esb_dongle", "esb_log") + dongle, [f"{d}/dongle.overlay"] + esb,
+                   "zmk-usb-logging")
         elif m == "usb":
             yield m, None, board, shield, optional(f"{d}/usb.conf"), []
         else:
@@ -60,7 +64,7 @@ def main():
     include, missing = [], []
     for dev_id, dev in cfg["keyboards"].items():
         keymap = f"config/devices/{dev_id}/{dev_id}.keymap"
-        for m, part, board, shield, confs, overlays in targets(dev_id, dev, cfg["dongle_board"]):
+        for m, part, board, shield, confs, overlays, *snippet in targets(dev_id, dev, cfg["dongle_board"]):
             missing += [p for p in [keymap, *confs, *overlays] if not (ROOT / p).exists()]
             include.append({
                 "name": "-".join(x for x in (dev_id, m, part) if x),
@@ -73,12 +77,13 @@ def main():
                 "confs": ";".join(confs),
                 "overlays": ";".join(overlays),
                 "cppflags": "-DKB_NO_BLE" if m in NO_BLE else "",
+                "snippet": snippet[0] if snippet else "",
             })
     for board in cfg.get("settings_reset", []):
         include.append({
             "name": f"reset-{board.split('/')[0]}", "device": "reset",
             "mode": "reset", "board": board, "shield": "settings_reset", "manifest": "config",
-            "keymap": "", "confs": "", "overlays": "", "cppflags": "",
+            "keymap": "", "confs": "", "overlays": "", "cppflags": "", "snippet": "",
         })
     names = [t["name"] for t in include]
     dupes = {n for n in names if names.count(n) > 1}

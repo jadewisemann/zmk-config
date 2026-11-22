@@ -16,3 +16,4 @@ order listed in `scripts/matrix.py`) + the device's own files in
 | `esb_half.conf` | both ESB halves: no idle before deep sleep, and the 32 MHz crystal kept running (`extra-modules/hfxo-always-on`) |
 | `esb_left.conf` / `esb_right.conf` | ESB peripheral IDs |
 | `esb_dongle.conf` | ESB dongle |
+| `esb_log.conf` | ESB dongle with link diagnostics on a USB serial port (`dongle-log`, built with the `zmk-usb-logging` snippet) |

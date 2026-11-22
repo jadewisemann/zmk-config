@@ -773,6 +773,109 @@ static inline int32_t drift_get_ticks(uint32_t clock_diff)
 }
 #endif
 
+/* Link statistics, for diagnostics only: nothing in the protocol reads them.
+ * The central counts per pipe; a peripheral counts for itself and reports the
+ * result in every packet that has no payload (see struct esb_peer_stats).
+ */
+#if ESB_CENTRAL
+static struct esb_pipe_stats link_stats[ESB_PIPE_COUNT];
+static uint32_t slots_skipped;
+
+int esb_get_pipe_stats(uint8_t pipe, struct esb_pipe_stats *stats)
+{
+	if (pipe >= ESB_PIPE_COUNT || stats == NULL) {
+		return -EINVAL;
+	}
+
+	unsigned int key = irq_lock();
+
+	*stats = link_stats[pipe];
+	stats->slots_skipped = slots_skipped;
+	stats->rssi = rssi_get(pipe);
+	stats->synced = is_slot_synced(pipe);
+
+	irq_unlock(key);
+
+	return 0;
+}
+#else
+/* The queue wait is kept as the maximum of the current and the previous
+ * second of the RTC, so a report shows a slow delivery for 1-2 s after it
+ * happened without anything having to be reset when a report is sent.
+ */
+#define QUEUE_WINDOW_SHIFT (15)
+#define QUEUE_WINDOW_MASK  (NRF_RTC_WRAP(UINT32_MAX) >> QUEUE_WINDOW_SHIFT)
+
+static struct {
+	uint8_t rx_timeouts;
+	uint8_t tx_retries;
+	uint8_t scans;
+	uint8_t queue_cur;
+	uint8_t queue_prev;
+	bool queue_pending;   /* a payload is waiting for its acknowledgement */
+	uint32_t queue_since; /* RTC value when the oldest such payload was queued */
+	uint32_t queue_window;
+} self_stats;
+
+static void queue_wait_roll(uint32_t now)
+{
+	uint32_t window = now >> QUEUE_WINDOW_SHIFT;
+
+	if (window == self_stats.queue_window) {
+		return;
+	}
+
+	bool next = window == ((self_stats.queue_window + 1) & QUEUE_WINDOW_MASK);
+
+	self_stats.queue_prev = next ? self_stats.queue_cur : 0;
+	self_stats.queue_cur = 0;
+	self_stats.queue_window = window;
+}
+
+/* Called with interrupts locked, when a payload is put into the TX ring. */
+static void queue_wait_start(void)
+{
+	if (!self_stats.queue_pending) {
+		self_stats.queue_pending = true;
+		self_stats.queue_since = nrfx_rtc_counter_get(&esb_rtc);
+	}
+}
+
+/* Called from the radio interrupt, after acknowledged data left the TX ring. */
+static void queue_wait_end(void)
+{
+	uint32_t now = nrfx_rtc_counter_get(&esb_rtc);
+
+	if (self_stats.queue_pending) {
+		uint32_t ms = NRF_RTC_WRAP(now - self_stats.queue_since) * 1000 / 32768;
+
+		queue_wait_roll(now);
+		self_stats.queue_cur = MAX(self_stats.queue_cur, MIN(ms, UINT8_MAX));
+	}
+
+	/* What is still in the ring was queued in the meantime. */
+	self_stats.queue_pending = count_tx(0) > 0;
+	self_stats.queue_since = now;
+}
+
+static uint8_t peer_stats_fill(uint8_t *data)
+{
+	struct esb_peer_stats *stats = (struct esb_peer_stats *)data;
+
+	queue_wait_roll(nrfx_rtc_counter_get(&esb_rtc));
+
+	stats->version = ESB_PEER_STATS_VERSION;
+	stats->rx_timeouts = self_stats.rx_timeouts;
+	stats->tx_retries = self_stats.tx_retries;
+	stats->scans = self_stats.scans;
+	stats->queue_max_ms = MAX(self_stats.queue_cur, self_stats.queue_prev);
+	stats->tx_power = (int8_t)tx_power_get(ctx.pipe);
+	stats->drift_us = (int8_t)CLAMP(ctx.drift / SCALE, INT8_MIN, INT8_MAX);
+
+	return sizeof(*stats);
+}
+#endif
+
 /* Default address configuration for ESB.
  * Roughly equal to the nRF24Lxx defaults, except for the number of pipes,
  * because more pipes are supported.
@@ -2351,6 +2454,10 @@ int esb_tx_start(uint8_t pipe, uint32_t size)
 
 	tx_start(pipe);
 
+#if ESB_PERIPHERAL
+	queue_wait_start();
+#endif
+
 	return 0;
 }
 
@@ -2464,6 +2571,9 @@ int esb_tdma_stop(bool force)
 	pto_context_reset();
 	reset_tx_all();
 	reset_rx_fifo();
+#if ESB_PERIPHERAL
+	self_stats.queue_pending = false;
+#endif
 
 	return 0;
 }
@@ -2486,6 +2596,11 @@ static void central_prepare_tx(void)
 	if ((int32_t)(tx_start - now) < RADIO_MARGIN_TICKS) {
 		slot_diff++;
 		tx_start = NRF_RTC_WRAP(tx_start + ctx.slotsize_ticks);
+	}
+
+	/* Not the very first call, which starts from an arbitrary counter value. */
+	if (esb_state == ESB_STATE_CENTRAL_TX) {
+		slots_skipped += slot_diff - 1;
 	}
 
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_CRCOK);
@@ -2610,6 +2725,7 @@ static void central_timeslot_end(void)
 
 			if (!slot_sync_check(pipe, start)) {
 				rssi_reset(pipe);
+				link_stats[resolve_pipe(pipe)].sync_lost++;
 				set_sync_evt_interrupt(pipe, false);
 			}
 		}
@@ -2647,13 +2763,30 @@ static void central_timeslot_end(void)
 		rssi_update(pipe, rssi);
 	}
 
+	struct esb_pipe_stats *stats = &link_stats[resolve_pipe(pipe)];
+
+	stats->answers++;
+	if (retransmit_payload) {
+		stats->duplicates++;
+	}
+
 	if (send_rx_event) {
 		if (rx_is_ctrl) {
 			pipe_info->crc = crc;
 			pipe_info->nesn = (!pipe_info->nesn);
+
+			/* The exact length keeps out the leftovers of a payload
+			 * that a peripheral resends as a control packet.
+			 */
+			if (rx_len == sizeof(struct esb_peer_stats) &&
+			    rx_pdu->data[0] == ESB_PEER_STATS_VERSION) {
+				memcpy(&stats->peer, rx_pdu->data, sizeof(stats->peer));
+				stats->peer_valid = true;
+			}
 		} else if (push_rx_fifo(pipe, rx_sn, rx_len, rx_pdu->data)) {
 			pipe_info->crc = crc;
 			pipe_info->nesn = (!pipe_info->nesn);
+			stats->payloads++;
 			set_rx_evt_interrupt();
 		}
 	}
@@ -2730,6 +2863,7 @@ static void peripheral_start_desync(void)
 	esb_state = ESB_STATE_PERIPHERAL_DESYNC;
 	on_radio_disabled = peripheral_disabled_desync;
 
+	self_stats.scans++;
 	scan_seed = scan_seed * 1664525U + 1013904223U;
 	esb_addr.rf_channel = get_channel(scan_seed);
 #if CONFIG_ZMK_ESB_WHITEEN
@@ -2791,6 +2925,7 @@ static void peripheral_disabled_desync(void)
 	struct esb_radio_pdu *tx_pdu = (struct esb_radio_pdu *)tx_payload_buffer;
 	if (!tx_pdu->pdu.ctrl && rx_nesn != pipe_info->sn) {
 		pop_tx(0);
+		queue_wait_end();
 	}
 	tx_pdu->pdu.ctrl = 1;
 
@@ -3067,6 +3202,7 @@ static void peripheral_disabled_rx(void)
 		}
 
 		LOG_WRN("timeout");
+		self_stats.rx_timeouts++;
 		if (++ctx.timeout_count > ctx.timeout_count_max) {
 			// something's wrong, disable hfclk and goto desync state
 			hfclk_off();
@@ -3109,6 +3245,7 @@ static void peripheral_disabled_rx(void)
 
 	uint8_t tx_len = tx_pdu->pdu.length;
 	if (tx_failed) {
+		self_stats.tx_retries++;
 		if (++pipe_info->tx_try > ctx.timeout_count_max) {
 			set_tx_evt_interrupt(0, false);
 			peripheral_start_desync();
@@ -3127,14 +3264,18 @@ static void peripheral_disabled_rx(void)
 		// if packet before was payload, then tx was successful.
 		if (++pipe_info->tx_try && !tx_pdu->pdu.ctrl) {
 			set_tx_evt_interrupt(0, true);
-			uint32_t popped = pop_tx(0);
+			pop_tx(0);
+			queue_wait_end();
 		}
 
 		tx_len = copy_tx(0, tx_pdu->data);
 		pipe_info->tx_try = 0;
 
-		// set tx pdu length to 4 for rssi settle time for central.
-		tx_pdu->pdu.length = tx_len > 0 ? tx_len : sizeof(struct esb_header_up);
+		/* A packet without a payload carries this side's link statistics.
+		 * It needs a body of a few bytes anyway, for the central's RSSI
+		 * measurement to settle.
+		 */
+		tx_pdu->pdu.length = tx_len > 0 ? tx_len : peer_stats_fill(tx_pdu->data);
 		tx_pdu->pdu.ctrl = tx_len == 0;
 #if !CONFIG_ZMK_ESB_HFCLK_OFF_EVERY_TX
 		if (tx_len > 0) {

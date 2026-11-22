@@ -31,8 +31,9 @@ for t in json.loads(os.environ["TARGETS"]):
         args.append(f"-DDTS_EXTRA_CPPFLAGS={t['cppflags']}")
     build_dir = root / "build" / t["name"]
     print(f"::group::{t['name']}", flush=True)
+    snippet = ["-S", t["snippet"]] if t.get("snippet") else []
     rc = subprocess.call(["west", "build", "-s", "zmk/app", "-d", str(build_dir),
-                          "-b", t["board"], "--", *args])
+                          "-b", t["board"], *snippet, "--", *args])
     config = build_dir / "zephyr" / ".config"
     if config.exists():
         print("--- Kconfig ---")

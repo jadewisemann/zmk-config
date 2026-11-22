@@ -74,6 +74,48 @@ static struct esb_context ctx = {
 
 static void tx_work_handler(struct k_work *work) { return; }
 
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_ESB_LINK_STATS)
+/* One line per half and second. Counts are for that second unless they are
+ * marked as totals; the part after the bar is what the half reports about
+ * itself (see struct esb_peer_stats), the part before it is measured here.
+ */
+static void link_stats_work_cb(struct k_work *work) {
+    static struct esb_pipe_stats prev[PERIPHERAL_COUNT];
+
+    for (int i = 0; i < PERIPHERAL_COUNT; ++i) {
+        struct esb_pipe_stats now;
+
+        if (esb_get_pipe_stats(SOURCE_TO_PIPE(i), &now) < 0) {
+            continue;
+        }
+
+        const struct esb_peer_stats *peer = &now.peer;
+        const struct esb_peer_stats *peer_prev = &prev[i].peer;
+
+        LOG_INF("ESB half %d %s rssi -%u answers %u keys %u dup %u lost(total) %u "
+                "skipped %u",
+                i, now.synced ? "up" : "DOWN", now.rssi, now.answers - prev[i].answers,
+                now.payloads - prev[i].payloads, now.duplicates - prev[i].duplicates,
+                now.sync_lost, now.slots_skipped - prev[i].slots_skipped);
+
+        if (now.peer_valid) {
+            LOG_INF("ESB half %d reports: timeouts %u retries %u scans(total) %u wait %u ms "
+                    "power %d dBm drift %d us",
+                    i, (uint8_t)(peer->rx_timeouts - peer_prev->rx_timeouts),
+                    (uint8_t)(peer->tx_retries - peer_prev->tx_retries), peer->scans,
+                    peer->queue_max_ms, peer->tx_power, peer->drift_us);
+        } else {
+            LOG_INF("ESB half %d reports: nothing yet (a half with older firmware never does)", i);
+        }
+
+        prev[i] = now;
+    }
+
+    k_work_reschedule(k_work_delayable_from_work(work), K_SECONDS(1));
+}
+static K_WORK_DELAYABLE_DEFINE(link_stats_work, link_stats_work_cb);
+#endif
+
 static int split_central_esb_send_command(uint8_t source,
                                           struct zmk_split_transport_central_command cmd) {
 
@@ -176,6 +218,10 @@ static int zmk_split_esb_central_init(void) {
 
     k_work_submit(&notify_status_work);
 
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_ESB_LINK_STATS)
+    k_work_reschedule(&link_stats_work, K_SECONDS(1));
+#endif
+
     return 0;
 }
 
@@ -195,6 +241,12 @@ static int handle_key_position_whole_key(int source, uint8_t *data) {
                 .data.key_position_event.position = (i * 8) + changed_bit,
                 .data.key_position_event.pressed = ((data[i] & BIT(changed_bit)) != 0),
             };
+
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_ESB_LINK_STATS)
+            LOG_INF("ESB key: half %d position %d %s", source,
+                    evt.data.key_position_event.position,
+                    evt.data.key_position_event.pressed ? "down" : "up");
+#endif
 
             if (zmk_split_transport_central_peripheral_event_handler(&esb_central, source, evt) ==
                 -EINVAL) {

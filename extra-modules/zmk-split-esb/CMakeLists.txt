@@ -4,12 +4,7 @@
 if(CONFIG_ZMK_SPLIT_ESB)
   if(NOT CONFIG_HAS_HW_NRF_PPI)
     message(FATAL_ERROR "zmk-split-esb: only SoCs with PPI (nRF52 series) are supported")
-  
-  # ZMK core sizes its per-peripheral arrays from this definition; app/CMakeLists.txt
-  # only sets it for the BLE transport.
-  zephyr_compile_definitions_ifdef(CONFIG_ZMK_SPLIT_ROLE_CENTRAL
-    ZMK_SPLIT_BLE_PERIPHERAL_COUNT=${CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS})
-endif()
+  endif()
 
   # Radio layer: TDMA / frequency hopping on the ESB physical layer.
   zephyr_library_named(zmk_split_esb_radio)

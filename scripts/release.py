@@ -46,6 +46,9 @@ for kb_id, kb in cfg["keyboards"].items():
         else:
             rows.append(f"| {MODES[m]} | " + " | ".join(link(f"{kb_id}-{m}-{p}", p) for p in PARTS) + " |")
     out += [f"### {kb_id}", "", "| mode | left | right | dongle |", "|---|---|---|---|", *rows]
+    log = link(f"{kb_id}-esb-dongle-log", "dongle with USB logging")
+    if log:
+        out += ["", f"ESB link diagnostics: {log} (flash it in place of the ESB dongle firmware)"]
     resets = [link(f"reset-{kb['board'].split('/')[0]}", "reset")]
     if kb["board"] != cfg["dongle_board"] and {"bledongle", "esb"} & set(kb["modes"]):
         resets.append(link(f"reset-{cfg['dongle_board'].split('/')[0]}", "reset (dongle)"))
