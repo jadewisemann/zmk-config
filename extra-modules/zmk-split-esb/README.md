@@ -102,6 +102,13 @@ Getting sync back:
 
 ## Guard rails
 
+- **A half does not turn its transmitter down.** It used to lower its power
+  to as little as -20 dBm while the dongle heard it well, which left no margin
+  against interference; every packet lost to that is a 2 ms retry. The floor is
+  now the -4 dBm it starts with (it still goes up to +4 dBm when packets fail).
+  This cannot be shown in the simulation; `power`, `retries` and `rssi` in the
+  statistics are the way to see it.
+
 - **The dongle restarts its slot sequence.** Every slot is started by a
   compare of the 32 kHz counter and ended by an interrupt of the timer that
   slot starts; preparing the next slot from there is all that keeps the

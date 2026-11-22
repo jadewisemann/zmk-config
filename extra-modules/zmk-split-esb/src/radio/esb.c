@@ -421,7 +421,15 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
 #define RSSI_DIFF_THRESHOLD_UP (4)
 #define RSSI_DIFF_THRESHOLD_DN (-2)
 #define TX_POWER_MAX	       (4)
-#define TX_POWER_MIN	       (-20)
+/* A half lowers its power while the dongle hears it louder than it needs to,
+ * and raises it again after three failed packets or a weak average. The floor
+ * was -20 dBm: fine in a quiet room, but then an interferer has only to be a
+ * little louder than a whisper to cost a packet, and every lost packet is a
+ * 2 ms retry, i.e. jitter in when a key arrives. A half transmits for some
+ * tens of microseconds a few times per second, so a higher floor costs next to
+ * nothing: it now stays at the power it starts with and only ever goes up.
+ */
+#define TX_POWER_MIN	       (-4)
 #define TX_POWER_BASE	       (-4)
 #define TX_POWER_STEP	       (8)
 #define TX_POWER_STEP_DN       (-2)
