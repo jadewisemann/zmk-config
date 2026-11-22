@@ -1,0 +1,18 @@
+/*
+ * ESB link test (tests/esb/run.py): the real KLOTZ keymap on the simulated
+ * nRF52 board. The mock kscan gets the keyboard's 10x4 matrix and the dongle's
+ * matrix transform, so key positions are the real ones; the dongle runs the
+ * keymap, the two halves only press keys (their events come from an overlay
+ * that run.py generates).
+ */
+#include "../../config/devices/klotz/klotz.keymap"
+#include "../../config/devices/klotz/dongle.overlay"
+#include "../../config/devices/klotz/esb.overlay"
+#include <dt-bindings/zmk/kscan_mock.h>
+
+&kscan {
+    /delete-property/ exit-after;
+    rows = <4>;
+    columns = <10>;
+    events = <>;
+};

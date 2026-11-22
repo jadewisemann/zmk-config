@@ -39,6 +39,7 @@ static int peripheral_handler_rb(int source, uint8_t *data, uint8_t size);
 static void battery_report_work_handler(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(battery_report_work, battery_report_work_handler);
 static void battery_report_work_handler(struct k_work *work) {
+#if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
     struct zmk_split_transport_peripheral_event event = {
         .type = ZMK_SPLIT_TRANSPORT_PERIPHERAL_EVENT_TYPE_BATTERY_EVENT,
         .data.battery_event.level = zmk_battery_state_of_charge(),
@@ -47,6 +48,7 @@ static void battery_report_work_handler(struct k_work *work) {
     if (split_peripheral_esb_report_event(&event) == -ENOMEM) {
         k_work_reschedule(&battery_report_work, K_SECONDS(1));
     }
+#endif
 }
 
 static void notify_transport_status(void);

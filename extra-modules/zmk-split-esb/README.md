@@ -63,7 +63,14 @@ Keeping sync (peripheral):
   one half could work while the other did not.
 - The drift estimate is fed the drift, not just the error left over after its
   own correction, is rounded to the nearest tick, and no longer ignores
-  anything beyond 50 us. With it the link holds to several hundred ppm.
+  anything beyond 50 us.
+- After a scan the half re-syncs after 4 ms, then 16 ms, 64 ms, and only then
+  every 250 ms, and each of these measures the drift for the next, longer one.
+  Waiting a whole heartbeat for the first measurement meant a half more than
+  about 600 ppm behind the dongle never got one: it missed that heartbeat,
+  timed out, scanned again and started over, delivering its keys only right
+  after each scan, up to half a second late. In simulation it now holds at
+  1000 ppm either way, and learns the drift to a few ppm.
 - A heartbeat is any exchange a period or more after the last sync, not only
   the one loop that is an exact multiple of the period.
 - The idle wake-up time includes the drift correction, and is compared as a
@@ -95,7 +102,8 @@ Getting sync back:
 
 ## Link statistics
 
-Nothing above has been measured on hardware, so the link reports on itself.
+The link is tested in simulation (`tests/esb`), which covers the logic but
+not the radio and the crystals of real boards. For those it reports on itself.
 
 Every half counts what happens on its side and sends the counts to the dongle
 in the packets that carry no payload (`struct esb_peer_stats`); that is always
@@ -109,7 +117,7 @@ half (half 0 is the left one):
 
 ```
 ESB half 0 up rssi -58 answers 4 keys 0 dup 0 lost(total) 0 skipped 0
-ESB half 0 reports: timeouts 0 retries 0 scans(total) 1 wait 3 ms power -4 dBm drift 2 us
+ESB half 0 reports: timeouts 0 retries 0 scans(total) 1 wait 3 ms power -4 dBm drift -12 ppm 32k crystal 32M ok
 ESB key: half 0 position 30 down
 ```
 
@@ -127,7 +135,9 @@ ESB key: half 0 position 30 down
 | `scans(total)` | times the half lost sync and searched for the dongle | stays the same after start-up |
 | `wait` | longest time a key event waited in the half, from the key scan until the dongle acknowledged it, over the last 1-2 s | 2-6 ms |
 | `power` | TX power the half has settled on | |
-| `drift` | how far the half's clock runs off the dongle's per heartbeat | a few us, steady |
+| `drift` | how far the half's 32 kHz clock is off the dongle's, as the half has learned it | within about 50 ppm, steady |
+| `32k` | what the half's 32 kHz clock runs from | `crystal`; `RC` means the board's crystal is missing or dead |
+| `32M` | `WAS-OFF` if the half ever found its 32 MHz crystal stopped when it woke up | `ok` |
 
 `wait` is the number that says whether the radio is what makes a key late.
 The `ESB key` lines show the order in which the dongle saw the key events.
@@ -144,6 +154,11 @@ the statistics were added.
   payload-less packet with a command, and re-reads its ring on every
   retransmission. Key events (half to dongle) are not affected, and
   whole-key state is re-sent after every reconnect.
-- Nothing here has been measured on hardware. The timing was checked against
-  a model of the arithmetic, the ARQ by tracing sequence numbers through lost
-  packets in both directions.
+- Nothing here has been measured on hardware. `tests/esb` runs the three
+  firmwares in simulation; its README lists what that cannot show.
+- A half whose 32 kHz clock is the RC oscillator converts the time of a long
+  scan into slot times with that clock's error, which the simulation does not
+  have. A board without a working 32 kHz crystal should be built with
+  `CONFIG_CLOCK_CONTROL_NRF_K32SRC_RC=y` (calibrated, 500 ppm). With the
+  crystal setting the clock starts on the uncalibrated RC oscillator and stays
+  there if the crystal never comes up.

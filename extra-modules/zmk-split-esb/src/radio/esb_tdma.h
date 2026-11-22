@@ -670,7 +670,7 @@ uint8_t esb_get_slot_state(void);
 int esb_conn_cb_register(struct esb_conn_cb *cb);
 
 /** Marks a peripheral's self-report; changes whenever its layout does. */
-#define ESB_PEER_STATS_VERSION 0xD1
+#define ESB_PEER_STATS_VERSION 0xD3
 
 /** @brief What a peripheral reports about its own side of the link.
  *
@@ -687,8 +687,18 @@ struct esb_peer_stats {
 			       *   it was acknowledged, in the last 1-2 s. 255: more.
 			       */
 	int8_t tx_power;      /**< Current TX power, dBm. */
-	int8_t drift_us;      /**< Clock drift estimate, us per heartbeat. */
+	uint8_t clocks;	      /**< ESB_PEER_CLOCK_* flags. */
+	int16_t drift_ppm;    /**< How far the 32 kHz clock is off the central's, as
+			       *   estimated; positive: the central's slots come late.
+			       */
 } __packed;
+
+/** The 32 kHz clock, which times the slots, runs from a crystal. */
+#define ESB_PEER_CLOCK_LF_XTAL	   BIT(0)
+/** The 32 MHz crystal, which the radio needs, was found stopped when the
+ *  peripheral woke up for an exchange (at any time since start-up).
+ */
+#define ESB_PEER_CLOCK_HF_WAS_OFF  BIT(1)
 
 /** @brief Link statistics of one pipe, as the central sees it. Cumulative. */
 struct esb_pipe_stats {

@@ -1,7 +1,7 @@
 #include <zephyr/kernel.h>
 #include <esb_tdma.h>
 
-inline uint8_t resolve_pipe(uint8_t pipe)
+static inline uint8_t resolve_pipe(uint8_t pipe)
 {
 #if CONFIG_ZMK_ESB_CENTRAL
 	__ASSERT_NO_MSG(pipe < ESB_PIPE_COUNT);

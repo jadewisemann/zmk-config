@@ -14,6 +14,7 @@
 #include <hal/nrf_timer.h>
 #include <nrfx_timer.h>
 #include <nrfx_rtc.h>
+#include <hal/nrf_clock.h>
 
 #ifdef NRF53_SERIES
 #include "hal/nrf_vreqctrl.h"
@@ -287,6 +288,8 @@ static struct esb_tdma_context {
 	uint8_t pipes;	     // number of pipes that are enabled
 
 	uint8_t scan_count;  // scans since sync was lost (saturates at DESYNC_FAST_SCANS)
+	uint32_t resync_loops; // loops until the next re-sync; grows up to hb_loops
+	uint32_t drift_span;   // ticks the drift estimate was measured over (at most a heartbeat)
 
 	bool is_hb; // true if current slot is heartbeat
 	bool hb_failed;
@@ -332,9 +335,9 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
 
 #define TICK			   (30)
 /* A drift measurement beyond this is taken for a bad capture, not a bad clock.
- * 2000 ppm is four times what an RC low-frequency oscillator may be off by.
+ * 4 % is twice what an uncalibrated RC low-frequency oscillator may be off by.
  */
-#define DRIFT_LIMIT_PPM		   (2000)
+#define DRIFT_LIMIT_PPM		   (40000)
 #define DESYNC_LIMIT_MS_PERIPHERAL (500)
 #define DESYNC_LIMIT_MS_CENTRAL	   (3000)
 
@@ -369,6 +372,18 @@ K_MSGQ_DEFINE(sync_event_msgq, sizeof(struct esb_evt), ESB_PIPE_COUNT * 2, 4);
  * is an RX window of a few hundred us plus a 4-byte reply.
  */
 #define HEARTBEAT_TICKS (32768 / 4)
+
+/* After a scan nothing is known about the clocks, and a whole heartbeat is far
+ * too long to wait: the window margin over 250 ms only covers ~600 ppm, and a
+ * peripheral whose clock was further behind the central's missed its first
+ * heartbeat, timed out, scanned again and never got to measure anything. So
+ * the first re-syncs follow each other quickly - after RESYNC_FIRST_LOOPS
+ * loops, then RESYNC_GROWTH times longer each time, up to the heartbeat - and
+ * each one measures the drift for the next, longer one. The first interval
+ * (4 ms with two halves at 1 kHz) tolerates a few percent of clock error.
+ */
+#define RESYNC_FIRST_LOOPS (2)
+#define RESYNC_GROWTH	   (4)
 
 #ifdef CONFIG_ZMK_ESB_FAST_SWITCHING_PERIPHERAL
 #define ESB_FAST_SWITCHING_PERIPHERAL 1
@@ -703,6 +718,14 @@ static inline void drift_reset(void)
 	ctx.drift_now = 0;
 	ctx.sync_rem_us = 0;
 	ctx.scan_margin = 0;
+	ctx.resync_loops = RESYNC_FIRST_LOOPS;
+	ctx.drift_span = 0;
+}
+
+/* Loops from one re-sync to the next: short right after a scan, then the heartbeat. */
+static inline uint32_t resync_loops(void)
+{
+	return CLAMP(ctx.resync_loops, 1, MAX(ctx.hb_loops, 1));
 }
 
 static inline int32_t us_to_ticks_signed(int32_t us)
@@ -716,13 +739,25 @@ static inline int32_t ticks_to_us_signed(int32_t ticks)
 			  : -(int32_t)k_ticks_to_us_near32(-ticks);
 }
 
-static inline void drift_update(int64_t drift)
+/* drift: us per heartbeat, measured over `span` ticks (at most a heartbeat).
+ *
+ * A measurement is only as good as it is long: the same microsecond of error
+ * is 30 times more drift over 8 ms than over a heartbeat. So a longer
+ * measurement replaces the estimate, an equally long one is averaged in, and a
+ * shorter one is ignored.
+ */
+static inline void drift_update(int64_t drift, uint32_t span)
 {
 	int64_t drift_scaled = drift * SCALE;
 
-	if (drift_initialized) {
+	if (span < ctx.drift_span) {
+		return;
+	}
+
+	if (drift_initialized || span > ctx.drift_span) {
 		drift_initialized = false;
 		ctx.drift = drift_scaled;
+		ctx.drift_span = span;
 
 		return;
 	}
@@ -812,6 +847,7 @@ static struct {
 	uint8_t scans;
 	uint8_t queue_cur;
 	uint8_t queue_prev;
+	bool hfxo_was_off;    /* the 32 MHz crystal was not running at a wake-up */
 	bool queue_pending;   /* a payload is waiting for its acknowledgement */
 	uint32_t queue_since; /* RTC value when the oldest such payload was queued */
 	uint32_t queue_window;
@@ -870,7 +906,23 @@ static uint8_t peer_stats_fill(uint8_t *data)
 	stats->scans = self_stats.scans;
 	stats->queue_max_ms = MAX(self_stats.queue_cur, self_stats.queue_prev);
 	stats->tx_power = (int8_t)tx_power_get(ctx.pipe);
-	stats->drift_us = (int8_t)CLAMP(ctx.drift / SCALE, INT8_MIN, INT8_MAX);
+
+	int64_t hb_us = k_ticks_to_us_near32(MAX(ctx.hb_loops, 1) * ctx.slotsize_ticks * ctx.pipes);
+
+	stats->drift_ppm = hb_us == 0 ? 0
+				      : (int16_t)CLAMP((int64_t)ctx.drift * 1000000 / (hb_us * SCALE),
+						       INT16_MIN, INT16_MAX);
+
+	nrf_clock_lfclk_t lf_src;
+
+	stats->clocks = 0;
+	if (nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_LFCLK, &lf_src) &&
+	    lf_src == NRF_CLOCK_LFCLK_XTAL) {
+		stats->clocks |= ESB_PEER_CLOCK_LF_XTAL;
+	}
+	if (self_stats.hfxo_was_off) {
+		stats->clocks |= ESB_PEER_CLOCK_HF_WAS_OFF;
+	}
 
 	return sizeof(*stats);
 }
@@ -1096,7 +1148,7 @@ static uint32_t bytewise_bit_swap(const uint8_t *input)
 /* Convert a base address from nRF24L format to nRF5 format */
 static uint32_t addr_conv(const uint8_t *addr)
 {
-	return __REV(bytewise_bit_swap(addr));
+	return BSWAP_32(bytewise_bit_swap(addr));
 }
 
 static inline void apply_errata143_workaround(void)
@@ -1807,8 +1859,18 @@ static bool push_rx_fifo(uint8_t pipe, uint8_t pid, uint8_t rx_len, uint8_t *rx_
 	return true;
 }
 
+/* See CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US. Nothing on real hardware. */
+static inline void sim_isr_latency(void)
+{
+#if defined(CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US) && (CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US > 0)
+	k_busy_wait(CONFIG_ZMK_ESB_SIM_ISR_LATENCY_US);
+#endif
+}
+
 static void esb_timer_handler(nrf_timer_event_t event_type, void *context)
 {
+	sim_isr_latency();
+
 	if (nrf_timer_int_enable_check(esb_timer.p_reg, NRF_TIMER_INT_COMPARE1_MASK)) {
 		nrf_timer_event_clear(esb_timer.p_reg, NRF_TIMER_EVENT_COMPARE1);
 		if (on_timer_compare1 != NULL) {
@@ -1835,6 +1897,8 @@ static void esb_timer_handler(nrf_timer_event_t event_type, void *context)
 
 static void esb_rtc_handler(nrf_rtc_event_t event_type, void *context)
 {
+	sim_isr_latency();
+
 	if (nrfy_rtc_int_enable_check(esb_rtc.p_reg, NRF_RTC_INT_COMPARE1_MASK)) {
 		nrfy_rtc_event_clear(esb_rtc.p_reg, NRF_RTC_EVENT_COMPARE_1);
 		if (on_timer_compare1 != NULL) {
@@ -2014,6 +2078,8 @@ static void get_and_clear_irqs(uint32_t *interrupts)
 
 static void radio_irq_handler(void)
 {
+	sim_isr_latency();
+
 	if (nrf_radio_int_enable_check(NRF_RADIO, NRF_RADIO_INT_CRCOK_MASK) &&
 	    nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_CRCOK)) {
 		// nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_CRCOK);
@@ -3008,14 +3074,24 @@ static void peripheral_prepare_next_rx(void)
 	nrfy_rtc_cc_set(esb_rtc.p_reg, 0, ctx.start);
 	nrfy_timer_cc_set(esb_timer.p_reg, NRF_TIMER_CC_CHANNEL1, ctx.timeout);
 
-	/* A heartbeat is any exchange a heartbeat period or more after the last
+	/* A heartbeat is any exchange a re-sync period or more after the last
 	 * sync. (It used to be only the loop that is an exact multiple of the
 	 * period, so waking up late for that one loop skipped the re-sync for a
 	 * whole further period.)
 	 */
-	ctx.is_hb = loops_diff >= ctx.hb_loops;
+	ctx.is_hb = loops_diff >= resync_loops();
 
 	if (!hfclk_is_on) {
+		nrf_clock_hfclk_t hf_src;
+
+		/* For the link statistics: with the crystal kept running (see
+		 * extra-modules/hfxo-always-on) it must be found running here.
+		 */
+		if (!nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_HFCLK, &hf_src) ||
+		    hf_src != NRF_CLOCK_HFCLK_HIGH_ACCURACY) {
+			self_stats.hfxo_was_off = true;
+		}
+
 		hfclk_on();
 	}
 
@@ -3067,7 +3143,7 @@ static void peripheral_prepare_sync(void)
 {
 	uint32_t now = nrfx_rtc_counter_get(&esb_rtc);
 	uint32_t loop_size = ctx.slotsize_ticks * ctx.pipes;
-	uint32_t hb_size = ctx.hb_loops * loop_size;
+	uint32_t hb_size = resync_loops() * loop_size; /* until the next re-sync */
 	uint32_t passed = NRF_RTC_WRAP(now - ctx.last_hb);
 	uint32_t hfclk_margin = (hfclk_is_on ? 0 : HFCLK_WARMUP_TICKS);
 
@@ -3137,21 +3213,27 @@ static void peripheral_prepare_rx(void)
 static void set_sync(int64_t sync)
 {
 	int32_t sync_ticks = us_to_ticks_signed((int32_t)sync);
+	uint32_t loop_size = ctx.slotsize_ticks * ctx.pipes;
 	uint32_t elapsed = ctx.slotdiff * ctx.slotsize_ticks;
-	uint32_t hb_size = ctx.hb_loops * ctx.slotsize_ticks * ctx.pipes;
+	uint32_t hb_size = ctx.hb_loops * loop_size;
 
-	/* Shorter than a heartbeat is the re-sync right after a scan (or a retry
-	 * in the middle of typing): too short to tell drift from measurement
-	 * error, so it only moves the anchor.
+	/* Shorter than the first re-sync interval is the exchange right after a
+	 * scan: too short to tell drift from measurement error, so it only moves
+	 * the anchor.
 	 */
-	if (elapsed >= hb_size) {
+	if (elapsed >= RESYNC_FIRST_LOOPS * loop_size) {
 		int64_t drift = sync - k_ticks_to_us_near32(ctx.margin_now) +
 				ticks_to_us_signed(ctx.drift_now) - ctx.sync_rem_us;
 		int64_t drift_per_hb = drift * hb_size / elapsed;
 		int64_t limit = (int64_t)k_ticks_to_us_near32(hb_size) * DRIFT_LIMIT_PPM / 1000000;
 
 		if (drift_per_hb >= -limit && drift_per_hb <= limit) {
-			drift_update(drift_per_hb);
+			drift_update(drift_per_hb, MIN(elapsed, hb_size));
+
+			/* The estimate now holds for a longer interval. */
+			if (elapsed >= resync_loops() * loop_size) {
+				ctx.resync_loops = MIN(resync_loops() * RESYNC_GROWTH, ctx.hb_loops);
+			}
 		}
 	}
 

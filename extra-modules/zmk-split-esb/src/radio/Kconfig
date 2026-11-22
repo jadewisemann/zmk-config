@@ -45,6 +45,17 @@ config ZMK_ESB_EVENT_IRQ_PRIORITY
 	range 0 6
 	default 2
 
+config ZMK_ESB_SIM_ISR_LATENCY_US
+	int "Simulated interrupt latency (tests/esb only)"
+	depends on ARCH_POSIX
+	default 0
+	help
+	  On the simulated board code runs in zero time, so an interrupt handler
+	  reacts in the same microsecond the interrupt is raised. A real CPU
+	  needs some tens of microseconds to get there and through the handler.
+	  This makes every radio-layer interrupt handler start that much later,
+	  so the tests also cover the time the handlers have.
+
 config ZMK_ESB_TX_RINGBUF_SIZE
 	int "set tx ringbuf size"
 	default 256

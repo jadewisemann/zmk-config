@@ -121,6 +121,7 @@ void schedule_thread_info_check_work(int interval_ms) {
 #endif // CONFIG_THREAD_STACK_INFO && CONFIG_INIT_STACKS
 
 void print_reset_reason(void) {
+#if !IS_ENABLED(CONFIG_ARCH_POSIX) /* no reset cause on the simulated board (tests/esb) */
     uint32_t cause = 0;
     int ret = hwinfo_get_reset_cause(&cause);
 
@@ -148,4 +149,5 @@ void print_reset_reason(void) {
     }
 
     hwinfo_clear_reset_cause();
+#endif
 }

@@ -47,6 +47,9 @@ trying that branch on a keyboard before it is merged; `latest` is not touched.
 Shared settings live in `config/modes/` (see its README); per-keyboard settings in
 `config/devices/<id>/`.
 
+The ESB link has a test that runs the dongle and both halves in a simulator:
+`tests/esb` (see its README).
+
 ## English and Korean
 
 There is one base layout, arranged for Korean 2-set, and the same keys type English.

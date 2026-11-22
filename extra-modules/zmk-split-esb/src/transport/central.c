@@ -100,10 +100,12 @@ static void link_stats_work_cb(struct k_work *work) {
 
         if (now.peer_valid) {
             LOG_INF("ESB half %d reports: timeouts %u retries %u scans(total) %u wait %u ms "
-                    "power %d dBm drift %d us",
+                    "power %d dBm drift %d ppm 32k %s 32M %s",
                     i, (uint8_t)(peer->rx_timeouts - peer_prev->rx_timeouts),
                     (uint8_t)(peer->tx_retries - peer_prev->tx_retries), peer->scans,
-                    peer->queue_max_ms, peer->tx_power, peer->drift_us);
+                    peer->queue_max_ms, peer->tx_power, peer->drift_ppm,
+                    (peer->clocks & ESB_PEER_CLOCK_LF_XTAL) ? "crystal" : "RC",
+                    (peer->clocks & ESB_PEER_CLOCK_HF_WAS_OFF) ? "WAS-OFF" : "ok");
         } else {
             LOG_INF("ESB half %d reports: nothing yet (a half with older firmware never does)", i);
         }
