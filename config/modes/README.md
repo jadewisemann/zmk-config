@@ -16,6 +16,7 @@ have).
 | `central.conf` | right half when it is the central (`bleright`) |
 | `peripheral.conf` | left half when something else is the central (`bleright`, `bledongle`, `esb`) |
 | `ble_dongle.conf` | BLE dongle |
+| `ble_dongle_half.conf` | both halves in `bledongle`: 1 ms press debounce |
 | `esb.conf` | every ESB build (halves and dongle) - radio settings must match |
 | `esb_half.conf` | both ESB halves: no idle before deep sleep, and the 32 MHz crystal kept running (`extra-modules/hfxo-always-on`) |
 | `esb_left.conf` / `esb_right.conf` | ESB peripheral IDs |
