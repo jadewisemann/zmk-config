@@ -30,6 +30,7 @@ def targets(dev_id, dev, dongle_board):
     board, shield = dev["board"], dev["shield"]
     half = optional(f"{d}/half.conf")
     dongle = optional(f"{d}/dongle.conf")
+    esb_dongle = optional(f"{d}/esb_dongle.conf")  # ESB dongle only (ESB options do not exist elsewhere)
     for m in dev["modes"]:
         if m == "ble":
             yield m, "left", board, f"{shield}_left", mode("half", "ble", "ble_central") + half, []
@@ -48,10 +49,10 @@ def targets(dev_id, dev, dongle_board):
             yield m, "left", board, f"{shield}_left", mode("half", "esb", "esb_half", "esb_left", "peripheral") + half, esb
             yield m, "right", board, f"{shield}_right", mode("half", "esb", "esb_half", "esb_right") + half, esb
             yield (m, "dongle", dongle_board, "kb_dongle",
-                   mode("esb", "esb_dongle") + dongle, [f"{d}/dongle.overlay"] + esb)
+                   mode("esb", "esb_dongle") + dongle + esb_dongle, [f"{d}/dongle.overlay"] + esb)
             # The same dongle with link diagnostics on a USB serial port.
             yield (m, "dongle-log", dongle_board, "kb_dongle",
-                   mode("esb", "esb_dongle", "esb_log") + dongle, [f"{d}/dongle.overlay"] + esb,
+                   mode("esb", "esb_dongle", "esb_log") + dongle + esb_dongle, [f"{d}/dongle.overlay"] + esb,
                    "zmk-usb-logging")
         elif m == "usb":
             yield m, None, board, shield, optional(f"{d}/usb.conf"), []

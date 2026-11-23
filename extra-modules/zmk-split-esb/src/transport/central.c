@@ -232,7 +232,56 @@ static int zmk_split_esb_central_init(void) {
 
 SYS_INIT(zmk_split_esb_central_init, APPLICATION, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
 
+static int apply_key_state(int source, uint8_t *data);
+
+#if CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE >= 0
+/* See CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE. Key states of the paced half wait
+ * here for the next point of the rhythm. Everything that touches the queue
+ * runs on the system workqueue, so the order of a half's states is kept.
+ */
+struct paced_state {
+    uint8_t position_state[POSITION_STATE_DATA_LEN];
+};
+K_MSGQ_DEFINE(paced_msgq, sizeof(struct paced_state), 16, 1);
+
+static void paced_flush(void) {
+    struct paced_state state;
+
+    while (k_msgq_get(&paced_msgq, &state, K_NO_WAIT) == 0) {
+        apply_key_state(CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE, state.position_state);
+    }
+}
+
+static void paced_work_cb(struct k_work *work) { paced_flush(); }
+static K_WORK_DELAYABLE_DEFINE(paced_work, paced_work_cb);
+#endif
+
 static int handle_key_position_whole_key(int source, uint8_t *data) {
+#if CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE >= 0
+    if (source == CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE) {
+        struct paced_state state;
+
+        memcpy(state.position_state, data, sizeof(state.position_state));
+        if (k_msgq_put(&paced_msgq, &state, K_NO_WAIT) != 0) {
+            /* Full: better early than lost. */
+            paced_flush();
+            return apply_key_state(source, data);
+        }
+
+        /* Does nothing while the work is already waiting for its point. */
+        int64_t now_us = k_ticks_to_us_floor64(k_uptime_ticks());
+        int32_t wait_us = CONFIG_ZMK_SPLIT_ESB_PACED_INTERVAL_US -
+                          (int32_t)(now_us % CONFIG_ZMK_SPLIT_ESB_PACED_INTERVAL_US);
+
+        k_work_schedule(&paced_work, K_USEC(wait_us));
+        return 0;
+    }
+#endif
+
+    return apply_key_state(source, data);
+}
+
+static int apply_key_state(int source, uint8_t *data) {
     int ret = 0;
     uint8_t *position_state = slot[source].position_state;
 

@@ -4,6 +4,10 @@ Each firmware is `shield/board defaults` + the mode files below (applied in the
 order listed in `scripts/matrix.py`) + the device's own files in
 `config/devices/<device>/`. Later files win.
 
+Device files: `half.conf` (both halves, every mode), `dongle.conf` (BLE and ESB
+dongle), `esb_dongle.conf` (ESB dongle only, for options the BLE build does not
+have).
+
 | file | used by |
 |---|---|
 | `half.conf` | every battery-powered half, all modes |

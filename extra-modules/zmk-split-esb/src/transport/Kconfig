@@ -45,6 +45,35 @@ config ZMK_SPLIT_ESB_SEND_WHOLE_KEY
     bool "send whole key state"
     default n
 
+config ZMK_SPLIT_ESB_PACED_SOURCE
+    int "Half whose key events the central passes on in a fixed rhythm (-1: none)"
+    depends on ZMK_SPLIT_ESB_ROLE_CENTRAL && ZMK_SPLIT_ESB_SEND_WHOLE_KEY
+    default -1
+    help
+        Makes the timing between the two halves what it is over Bluetooth.
+
+        With a Bluetooth split, the half that is the central handles its own
+        keys at once, while the other half's keys wait for the next connection
+        event, which comes every 7.5 ms. Over ESB both halves arrive within a
+        millisecond or three. That is faster, but it moves the point at which
+        a hold-tap on one half and a key on the other count as "released
+        first": a thumb released up to ~7 ms after a key of the other hand
+        was a tap over Bluetooth and is a hold over ESB, and typing habits are
+        tuned to the former.
+
+        With this set to a half's peripheral id (0: left, 1: right), the
+        central passes that half's key events on only at multiples of
+        ZMK_SPLIT_ESB_PACED_INTERVAL_US, like a connection event would. Set it
+        to the half that is not the central in the Bluetooth mode the keymap
+        was tuned in. It adds up to one interval of latency to that half.
+
+config ZMK_SPLIT_ESB_PACED_INTERVAL_US
+    int "Rhythm of the paced half, in microseconds"
+    depends on ZMK_SPLIT_ESB_PACED_SOURCE >= 0
+    default 7500
+    help
+        7500 is the connection interval ZMK uses between the halves.
+
 config ZMK_SPLIT_ESB_LINK_STATS
     bool "Log link statistics once per second"
     depends on ZMK_SPLIT_ESB_ROLE_CENTRAL

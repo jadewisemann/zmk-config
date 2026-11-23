@@ -111,6 +111,9 @@ def make_scenarios():
                                  conf={"central": ["CONFIG_ZMK_ESB_SIM_STALL_EVERY=3000"]}, stalls=True),
     }
     left, right, typed = rolls(8)
+    s["paced"] = Scenario("rolling, with the right half's keys passed on in the 7.5 ms rhythm of Bluetooth",
+                          left, right, typed, conf={"central": ["CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE=1"]},
+                          args={"phy": LOSS + "0.05"})
     s["rolls"] = Scenario("both hands rolling, 35 ms from key to key, 5 % loss", left, right, typed,
                           args={"left": "-xo_drift=40e-6", "right": "-xo_drift=-40e-6", "phy": LOSS + "0.05"})
     # A half that is switched on 10 s after the others. Its own clock starts

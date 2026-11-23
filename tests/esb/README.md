@@ -28,6 +28,7 @@ lose sync after their start-up scan.
 | `loss30` | 30 % of all packets lost, clocks 300 and 200 ppm off |
 | `long` | 12 minutes across the wrap of the 24-bit RTC, 5 % loss |
 | `rolls` | both hands alternate, 35 ms from key to key with the keys overlapping, 5 % loss: the letters must come out in order |
+| `paced` | the same rolling with `CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE=1`: the order must survive the right half's keys being held back |
 | `late` | the left half is switched on 10 s after the dongle |
 | `stall` | every 3 s the dongle is held up while preparing a slot, so nothing starts that slot: its watchdog has to restart the slot sequence |
 | `other-half` | the left half has another protocol version: it must not sync, and only `J` is typed |

@@ -100,6 +100,23 @@ Getting sync back:
 - The fast scans are given back by the first completed exchange, and a scan
   that ends on a packet without slot parameters does not use one up.
 
+## Timing between the halves
+
+Over ESB both halves reach the dongle within a millisecond or three. With a
+Bluetooth split the half that is the central handles its own keys at once and
+the other half's keys wait for the next connection event, up to 7.5 ms. That
+difference is small, but a hold-tap on one half and a key on the other are
+decided by which was released first, and a keymap tuned over Bluetooth has
+that offset built in: in simulation, a left thumb (Space / Nav) released up
+to about 6 ms after a right-hand key is a tap over Bluetooth and a hold over
+ESB.
+
+`CONFIG_ZMK_SPLIT_ESB_PACED_SOURCE=<peripheral id>` makes the dongle pass that
+half's key events on only at multiples of 7.5 ms, which puts the decision
+point back where it is over Bluetooth, at the price of that latency for that
+half. It is a per-keyboard choice: `config/devices/<id>/esb_dongle.conf`,
+which only the ESB dongle firmware gets. KLOTZ sets it for the right half.
+
 ## Guard rails
 
 - **A half does not turn its transmitter down.** It used to lower its power
